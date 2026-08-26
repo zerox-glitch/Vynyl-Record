@@ -1,0 +1,232 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { Navbar } from '@/components/ui/Navbar';
+import { Footer } from '@/components/ui/Footer';
+import { AdminCmsTab } from '@/components/admin/AdminCmsTab';
+import { AdminPricingTab } from '@/components/admin/AdminPricingTab';
+import { AdminAudioStudioTab } from '@/components/admin/AdminAudioStudioTab';
+import { AdminUsersTab } from '@/components/admin/AdminUsersTab';
+import { AdminRecordingsTab } from '@/components/admin/AdminRecordingsTab';
+import { 
+  SiteSettings, 
+  PricingPlan, 
+  AudioAsset, 
+  Profile, 
+  Recording 
+} from '@/types';
+import { 
+  DEFAULT_SITE_SETTINGS, 
+  DEFAULT_PRICING_PLANS, 
+  DEFAULT_AUDIO_ASSETS, 
+  DEMO_RECORDINGS 
+} from '@/lib/constants';
+import { 
+  Shield, 
+  FileEdit, 
+  DollarSign, 
+  Volume2, 
+  Users, 
+  Disc3, 
+  Sparkles,
+  Lock,
+  Unlock
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+
+type AdminTab = 'cms' | 'pricing' | 'audio' | 'users' | 'recordings';
+
+export default function AdminPage() {
+  const [activeTab, setActiveTab] = useState<AdminTab>('cms');
+
+  // Master Data State
+  const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
+  const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>(DEFAULT_PRICING_PLANS);
+  const [audioAssets, setAudioAssets] = useState<AudioAsset[]>(DEFAULT_AUDIO_ASSETS);
+  const [users, setUsers] = useState<Profile[]>([]);
+  const [recordings, setRecordings] = useState<Recording[]>(DEMO_RECORDINGS);
+
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState<boolean>(true);
+
+  // Load all admin data
+  useEffect(() => {
+    async function loadData() {
+      setIsLoading(true);
+      try {
+        const [cmsRes, plansRes, assetsRes, usersRes, recsRes] = await Promise.all([
+          fetch('/api/cms').then((r) => r.json()),
+          fetch('/api/pricing').then((r) => r.json()),
+          fetch('/api/audio/upload-asset').then((r) => r.json()),
+          fetch('/api/admin/users').then((r) => r.json()),
+          fetch('/api/recordings').then((r) => r.json()),
+        ]);
+
+        if (cmsRes.settings) setSiteSettings(cmsRes.settings);
+        if (plansRes.plans) setPricingPlans(plansRes.plans);
+        if (assetsRes.assets) setAudioAssets(assetsRes.assets);
+        if (usersRes.users) setUsers(usersRes.users);
+        if (recsRes.recordings) setRecordings(recsRes.recordings);
+      } catch (err) {
+        console.warn('Admin load data fallback:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadData();
+  }, []);
+
+  // Handlers
+  const handleSaveCms = async (updated: SiteSettings) => {
+    const res = await fetch('/api/cms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    });
+    if (!res.ok) throw new Error('Failed to update CMS');
+    setSiteSettings(updated);
+  };
+
+  const handleSavePlan = async (plan: PricingPlan) => {
+    const res = await fetch('/api/pricing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(plan),
+    });
+    if (!res.ok) throw new Error('Failed to save plan');
+    const data = await res.json();
+    setPricingPlans((prev) => {
+      const idx = prev.findIndex((p) => p.id === plan.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = data.plan;
+        return copy;
+      }
+      return [...prev, data.plan];
+    });
+  };
+
+  const handleAssetAdded = (asset: AudioAsset) => {
+    setAudioAssets((prev) => [asset, ...prev]);
+  };
+
+  const handleAssetDeleted = (id: string) => {
+    setAudioAssets((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const handleUpdateUser = async (id: string, updates: Partial<Profile>) => {
+    const res = await fetch('/api/admin/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, updates }),
+    });
+    if (!res.ok) throw new Error('Failed to update user');
+    const data = await res.json();
+    setUsers((prev) => prev.map((u) => (u.id === id ? data.user : u)));
+  };
+
+  const handleDeleteUser = async (id: string) => {
+    const res = await fetch(`/api/admin/users?id=${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete user');
+    setUsers((prev) => prev.filter((u) => u.id !== id));
+  };
+
+  const handleDeleteRecording = async (id: string) => {
+    const res = await fetch(`/api/recordings?id=${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete recording');
+    setRecordings((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const tabConfigs = [
+    { id: 'cms', label: 'Site CMS & Theme', icon: <FileEdit className="w-4 h-4" /> },
+    { id: 'pricing', label: 'Pricing & Stripe Plans', icon: <DollarSign className="w-4 h-4" /> },
+    { id: 'audio', label: 'Audio Assets & Mic Studio', icon: <Volume2 className="w-4 h-4" /> },
+    { id: 'users', label: 'User Management', icon: <Users className="w-4 h-4" /> },
+    { id: 'recordings', label: 'Recordings Moderation', icon: <Disc3 className="w-4 h-4" /> },
+  ];
+
+  return (
+    <div className="min-h-screen bg-[#0c0a09] text-stone-100 flex flex-col selection:bg-amber-600 selection:text-white">
+      <Navbar />
+
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+        {/* Admin Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-stone-800 pb-6">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-amber-500 font-mono text-xs uppercase tracking-widest">
+              <Shield className="w-4 h-4" />
+              <span>Restricted Operations Hub</span>
+            </div>
+            <h1 className="text-3xl font-serif font-bold text-stone-100">
+              Master Admin Operations
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-2 bg-stone-900 border border-amber-600/30 px-3 py-1.5 rounded-xl text-xs font-mono text-amber-300">
+            <Unlock className="w-3.5 h-3.5 text-amber-400" />
+            <span>Admin Clearance Granted</span>
+          </div>
+        </div>
+
+        {/* Tab Navigation */}
+        <div className="flex flex-wrap gap-2 border-b border-stone-800/80 pb-4">
+          {tabConfigs.map((tab) => {
+            const isActive = activeTab === tab.id;
+
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as AdminTab)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all ${
+                  isActive
+                    ? 'bg-amber-600 text-stone-950 font-bold shadow-lg shadow-amber-950/60'
+                    : 'bg-stone-900 text-stone-300 hover:text-amber-200 hover:bg-stone-800'
+                }`}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Active Tab Panel */}
+        <div className="pt-2">
+          {activeTab === 'cms' && (
+            <AdminCmsTab settings={siteSettings} onSave={handleSaveCms} />
+          )}
+
+          {activeTab === 'pricing' && (
+            <AdminPricingTab plans={pricingPlans} onSavePlan={handleSavePlan} />
+          )}
+
+          {activeTab === 'audio' && (
+            <AdminAudioStudioTab
+              assets={audioAssets}
+              onAssetAdded={handleAssetAdded}
+              onAssetDeleted={handleAssetDeleted}
+            />
+          )}
+
+          {activeTab === 'users' && (
+            <AdminUsersTab
+              users={users}
+              onUpdateUser={handleUpdateUser}
+              onDeleteUser={handleDeleteUser}
+            />
+          )}
+
+          {activeTab === 'recordings' && (
+            <AdminRecordingsTab
+              recordings={recordings}
+              onDeleteRecording={handleDeleteRecording}
+            />
+          )}
+        </div>
+      </main>
+
+      <Footer />
+    </div>
+  );
+}
