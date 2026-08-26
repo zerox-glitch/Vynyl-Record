@@ -1,0 +1,48 @@
+{
+  "name": "vinyl-voice-notes",
+  "version": "1.0.0",
+  "description": "Preserve your voice notes in vintage physical-feeling 3D digital vinyl records",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@react-spring/three": "^9.7.3",
+    "@react-three/drei": "^9.106.0",
+    "@react-three/fiber": "^8.16.8",
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.112.4",
+    "autoprefixer": "^10.4.20",
+    "canvas-confetti": "^1.9.4",
+    "clsx": "^2.1.1",
+    "ffmpeg-static": "^5.3.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "framer-motion": "^11.18.2",
+    "lucide-react": "^0.475.0",
+    "next": "^14.2.24",
+    "openai": "^4.85.4",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hot-toast": "^2.5.2",
+    "stripe": "^17.7.0",
+    "tailwind-merge": "^2.6.0",
+    "tailwindcss": "^3.4.17",
+    "three": "^0.160.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/canvas-confetti": "^1.9.0",
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.160.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.3.3"
+  }
+}
