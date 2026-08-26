@@ -16,7 +16,7 @@ try {
   }
 } catch (e) {
   // If static module not resolved, rely on system PATH ffmpeg
-  console.log('Using system ffmpeg fallback');
+  console.log('[AudioEngine] Using system ffmpeg fallback');
 }
 
 export interface AudioProcessingOptions {
@@ -33,18 +33,23 @@ export interface AudioProcessResult {
   outputFilePath: string;
 }
 
-// Universal robust audio filter strings compatible with all FFmpeg builds
-function getVoiceFilterString(preset: FilterPresetType): string {
+/**
+ * Universal robust audio filter strings compatible with all FFmpeg builds.
+ */
+export function getVoiceFilterString(preset: FilterPresetType): string {
   switch (preset) {
     case 'gramophone':
-      // Gramophone acoustic horn curve: 300Hz highpass, 3500Hz lowpass bandpass + vintage compressor
-      return 'highpass=f=300,lowpass=f=3500,acompressor=threshold=-18dB:ratio=4:1:attack=20:release=250,volume=1.3';
+      // 1920s Gramophone: 400Hz-2800Hz narrow horn bandpass + 1.2kHz acoustic resonance peak + overdrive
+      return 'highpass=f=400,lowpass=f=2800,equalizer=f=1200:t=q:w=1.5:g=8,acompressor=threshold=-20dB:ratio=6:1:attack=10:release=150,volume=1.5';
+
     case 'radio':
-      // 1940s Vintage Vacuum Radio: 200Hz - 4500Hz bandpass + gentle tremolo wave
-      return 'highpass=f=200,lowpass=f=4500,tremolo=f=5:d=0.1,volume=1.2';
+      // 1940s Vintage Radio: 250Hz-3800Hz bandpass + 5.5Hz AM tremolo flutter + carrier resonance
+      return 'highpass=f=250,lowpass=f=3800,tremolo=f=5.5:d=0.35,equalizer=f=1800:t=q:w=2:g=5,volume=1.4';
+
     case 'tape':
-      // 1960s Tape Saturation: 8000Hz lowpass + warm tape compression
-      return 'lowpass=f=8000,acompressor=threshold=-12dB:ratio=3:1:attack=15:release=200,volume=1.2';
+      // 1960s Tape Saturation: 6500Hz silky lowpass + 120Hz bass bump + tape compression
+      return 'lowpass=f=6500,equalizer=f=120:t=q:w=1:g=4,acompressor=threshold=-16dB:ratio=4:1:attack=10:release=180,volume=1.3';
+
     case 'clean':
     default:
       return 'volume=1.0,acompressor=threshold=-12dB:ratio=2:1';
@@ -52,22 +57,26 @@ function getVoiceFilterString(preset: FilterPresetType): string {
 }
 
 /**
- * Probes duration of an audio file in seconds.
+ * Probes duration of an audio file in seconds with safe fallbacks.
  */
 export function getAudioDuration(filePath: string): Promise<number> {
   return new Promise((resolve) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err || !metadata || !metadata.format || !metadata.format.duration) {
-        try {
-          const stats = fs.statSync(filePath);
-          const estimated = Math.max(3, Math.min(600, Math.floor(stats.size / 16000)));
-          return resolve(estimated);
-        } catch {
-          return resolve(10);
+    try {
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        if (err || !metadata || !metadata.format || !metadata.format.duration) {
+          try {
+            const stats = fs.statSync(filePath);
+            const estimated = Math.max(3, Math.min(600, Math.floor(stats.size / 24000)));
+            return resolve(estimated);
+          } catch {
+            return resolve(10);
+          }
         }
-      }
-      resolve(metadata.format.duration);
-    });
+        resolve(metadata.format.duration);
+      });
+    } catch {
+      resolve(10);
+    }
   });
 }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { addAudioAsset, getAudioAssets, deleteAudioAsset } from '@/lib/db';
 import { AudioAsset, AudioCategory } from '@/types';
@@ -28,18 +29,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No audio file provided.' }, { status: 400 });
     }
 
-    const audioDir = path.join(process.cwd(), 'public', 'audio');
-    if (!fs.existsSync(audioDir)) {
-      fs.mkdirSync(audioDir, { recursive: true });
-    }
-
     const ext = path.extname(file.name) || '.mp3';
     const assetId = uuidv4();
     const fileName = `custom-${assetId.slice(0, 8)}${ext}`;
-    const filePath = path.join(audioDir, fileName);
+
+    const tmpAudioDir = path.join(os.tmpdir(), 'vynyl_audio');
+    if (!fs.existsSync(tmpAudioDir)) {
+      try {
+        fs.mkdirSync(tmpAudioDir, { recursive: true });
+      } catch (e) {
+        console.warn('[AssetUpload] Warning creating tmp audio directory:', e);
+      }
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    await fs.promises.writeFile(filePath, buffer);
+
+    // 1. Write to tmp audio directory
+    const tmpFilePath = path.join(tmpAudioDir, fileName);
+    try {
+      await fs.promises.writeFile(tmpFilePath, buffer);
+    } catch (e) {
+      console.warn('[AssetUpload] Error writing to tmp:', e);
+    }
+
+    // 2. Attempt to write to public/audio if writable (local dev)
+    const publicAudioDir = path.join(process.cwd(), 'public', 'audio');
+    try {
+      if (!fs.existsSync(publicAudioDir)) {
+        fs.mkdirSync(publicAudioDir, { recursive: true });
+      }
+      const publicFilePath = path.join(publicAudioDir, fileName);
+      await fs.promises.writeFile(publicFilePath, buffer);
+    } catch {
+      // Ignored in read-only Vercel serverless environment; route handler serves from tmp
+    }
 
     const newAsset: AudioAsset = {
       id: assetId,
