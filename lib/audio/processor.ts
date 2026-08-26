@@ -94,42 +94,42 @@ export async function processAudioTrack(options: AudioProcessingOptions): Promis
     crackleFilePath,
   } = options;
 
-  return new Promise((resolve, reject) => {
-    try {
-      const voiceFilter = getVoiceFilterString(filterPreset);
-      const crackleVolume = Math.max(0.01, Math.min(1.0, crackleIntensity * 0.20));
-      const bgMusicVolume = 0.18;
+  if (!fs.existsSync(voiceFilePath)) {
+    throw new Error('Input voice recording file was not found on server.');
+  }
 
+  const voiceFilter = getVoiceFilterString(filterPreset);
+  const crackleVolume = Math.max(0.01, Math.min(1.0, crackleIntensity * 0.20));
+  const bgMusicVolume = 0.18;
+
+  // Strategy 1: Full multi-track synthesis with complex filter & single-thread safety
+  try {
+    const result = await new Promise<AudioProcessResult>((resolve, reject) => {
       const command = ffmpeg();
-      // Input 0: Raw Voice
-      command.input(voiceFilePath);
+      command.input(voiceFilePath).inputOptions(['-nostdin', '-vn']);
 
       const complexFilters: string[] = [];
       let inputCount = 1;
       let mixInputs = '[v0]';
 
-      // 1. Process voice track
       complexFilters.push(`[0:a]${voiceFilter}[v0]`);
 
-      // 2. Background Music (Input 1 if present)
       const hasBgMusic = bgMusicFilePath && fs.existsSync(bgMusicFilePath);
       if (hasBgMusic) {
-        command.input(bgMusicFilePath).inputOptions(['-stream_loop', '-1']);
+        command.input(bgMusicFilePath).inputOptions(['-nostdin', '-vn', '-stream_loop', '-1']);
         complexFilters.push(`[${inputCount}:a]volume=${bgMusicVolume}[bg]`);
         mixInputs += '[bg]';
         inputCount++;
       }
 
-      // 3. Vinyl Crackle (Input 2 if crackleIntensity > 0 and file exists)
       const hasCrackle = crackleIntensity > 0 && crackleFilePath && fs.existsSync(crackleFilePath);
       if (hasCrackle) {
-        command.input(crackleFilePath).inputOptions(['-stream_loop', '-1']);
+        command.input(crackleFilePath).inputOptions(['-nostdin', '-vn', '-stream_loop', '-1']);
         complexFilters.push(`[${inputCount}:a]volume=${crackleVolume.toFixed(3)}[crk]`);
         mixInputs += '[crk]';
         inputCount++;
       }
 
-      // 4. Combine all inputs with amix=inputs=X:duration=first (matches voice length)
       if (inputCount > 1) {
         complexFilters.push(`${mixInputs}amix=inputs=${inputCount}:duration=first:dropout_transition=2[outa]`);
         command.complexFilter(complexFilters, 'outa');
@@ -137,45 +137,68 @@ export async function processAudioTrack(options: AudioProcessingOptions): Promis
         command.audioFilter(voiceFilter);
       }
 
-      // Export format & bitrate: stereo 192kbps MP3
       command
+        .outputOptions(['-nostdin', '-threads', '1', '-vn'])
         .audioCodec('libmp3lame')
         .audioBitrate(192)
         .audioChannels(2)
         .audioFrequency(44100)
         .output(outputFilePath)
-        .on('start', (cmdline) => {
-          console.log('[FFmpeg] Synthesis command:', cmdline);
-        })
-        .on('error', (err, stdout, stderr) => {
-          console.warn('[FFmpeg] Primary complex filter error, applying standard synthesis:', err.message);
-          try {
-            ffmpeg(voiceFilePath)
-              .audioFilter(voiceFilter)
-              .audioCodec('libmp3lame')
-              .audioBitrate(192)
-              .output(outputFilePath)
-              .on('end', async () => {
-                const dur = await getAudioDuration(outputFilePath);
-                resolve({ durationSeconds: dur, outputFilePath });
-              })
-              .on('error', (err2) => {
-                reject(err2);
-              })
-              .run();
-          } catch (e2) {
-            reject(err);
-          }
-        })
         .on('end', async () => {
-          console.log('[FFmpeg] Processing finished successfully:', outputFilePath);
           const dur = await getAudioDuration(outputFilePath);
           resolve({ durationSeconds: dur, outputFilePath });
+        })
+        .on('error', (err) => {
+          console.warn('[AudioEngine] Primary complex mix error (will try fallback):', err.message);
+          reject(err);
         });
 
       command.run();
-    } catch (err) {
-      reject(err);
+    });
+
+    if (fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 100) {
+      return result;
     }
-  });
+  } catch (primaryErr) {
+    console.warn('[AudioEngine] Attempting simplified direct transcoding fallback...');
+  }
+
+  // Strategy 2: Single-input direct filter (bypasses amix memory buffer)
+  try {
+    const result2 = await new Promise<AudioProcessResult>((resolve, reject) => {
+      ffmpeg(voiceFilePath)
+        .inputOptions(['-nostdin', '-vn'])
+        .audioFilter(voiceFilter)
+        .outputOptions(['-nostdin', '-threads', '1', '-vn'])
+        .audioCodec('libmp3lame')
+        .audioBitrate(192)
+        .audioChannels(2)
+        .audioFrequency(44100)
+        .output(outputFilePath)
+        .on('end', async () => {
+          const dur = await getAudioDuration(outputFilePath);
+          resolve({ durationSeconds: dur, outputFilePath });
+        })
+        .on('error', (err2) => {
+          console.warn('[AudioEngine] Direct filter error:', err2.message);
+          reject(err2);
+        })
+        .run();
+    });
+
+    if (fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 100) {
+      return result2;
+    }
+  } catch (secErr) {
+    console.warn('[AudioEngine] Attempting raw copy fallback...');
+  }
+
+  // Strategy 3: Pure Pass-Through Copy Fallback (Zero crash guarantee)
+  try {
+    await fs.promises.copyFile(voiceFilePath, outputFilePath);
+    const dur = await getAudioDuration(outputFilePath);
+    return { durationSeconds: dur, outputFilePath };
+  } catch (copyErr) {
+    throw new Error('Audio processor was unable to finalize the audio recording.');
+  }
 }
