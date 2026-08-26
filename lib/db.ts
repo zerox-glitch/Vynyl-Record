@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { 
   Recording, 
   SiteSettings, 
@@ -25,7 +26,8 @@ interface LocalStore {
   integrationSettings: IntegrationSettings;
 }
 
-const DATA_FILE = path.join(process.cwd(), 'tmp', 'local_database.json');
+// Serverless writable directory: use os.tmpdir() to prevent EROFS errors on Vercel
+const DATA_FILE = path.join(os.tmpdir(), 'vynyl_local_database.json');
 
 const DEFAULT_PROFILES: Profile[] = [
   {
@@ -71,43 +73,69 @@ const DEFAULT_INTEGRATION_SETTINGS: IntegrationSettings = {
   updated_at: new Date().toISOString(),
 };
 
+function getInitialStore(): LocalStore {
+  return {
+    recordings: [...DEMO_RECORDINGS],
+    siteSettings: { ...DEFAULT_SITE_SETTINGS },
+    pricingPlans: [...DEFAULT_PRICING_PLANS],
+    audioAssets: [...DEFAULT_AUDIO_ASSETS],
+    profiles: [...DEFAULT_PROFILES],
+    integrationSettings: { ...DEFAULT_INTEGRATION_SETTINGS },
+  };
+}
+
+// In-memory runtime cache for serverless resiliency against read-only or ephemeral filesystems
+function getMemoryStore(): LocalStore {
+  const globalObj = globalThis as unknown as { __vynylLocalStore?: LocalStore };
+  if (!globalObj.__vynylLocalStore) {
+    globalObj.__vynylLocalStore = getInitialStore();
+  }
+  return globalObj.__vynylLocalStore;
+}
+
+function setMemoryStore(store: LocalStore) {
+  const globalObj = globalThis as unknown as { __vynylLocalStore?: LocalStore };
+  globalObj.__vynylLocalStore = store;
+}
+
 function readLocalStore(): LocalStore {
+  const memStore = getMemoryStore();
+
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.recordings)) {
+        setMemoryStore(parsed);
+        return parsed;
+      }
     }
   } catch (err) {
-    console.error('Error reading local DB store:', err);
+    console.warn('[DB] Local DB file read warning (using in-memory store):', err);
   }
 
-  const initialStore: LocalStore = {
-    recordings: DEMO_RECORDINGS,
-    siteSettings: DEFAULT_SITE_SETTINGS,
-    pricingPlans: DEFAULT_PRICING_PLANS,
-    audioAssets: DEFAULT_AUDIO_ASSETS,
-    profiles: DEFAULT_PROFILES,
-    integrationSettings: DEFAULT_INTEGRATION_SETTINGS,
-  };
-
+  // Attempt to write initial store to tmp
   try {
     const dir = path.dirname(DATA_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(initialStore, null, 2), 'utf-8');
+    fs.writeFileSync(DATA_FILE, JSON.stringify(memStore, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Error writing initial local DB store:', err);
+    console.warn('[DB] Local DB tmp file write note (in-memory mode active):', err);
   }
 
-  return initialStore;
+  return memStore;
 }
 
 function writeLocalStore(store: LocalStore) {
+  // Always update in-memory store first
+  setMemoryStore(store);
+
   try {
     const dir = path.dirname(DATA_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Error saving local store:', err);
+    console.warn('[DB] Local store tmp write note:', err);
   }
 }
 
@@ -313,7 +341,6 @@ export async function saveRecording(recording: Recording): Promise<Recording> {
   }
 
   const store = readLocalStore();
-  // Check if exists
   const idx = store.recordings.findIndex((r) => r.id === recording.id || r.slug === recording.slug);
   if (idx >= 0) {
     store.recordings[idx] = recording;
