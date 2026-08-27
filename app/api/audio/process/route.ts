@@ -54,22 +54,88 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
     await fs.promises.writeFile(voiceFilePath, buffer);
 
-    // Resolve background & crackle paths
+    // Resolve background & crackle paths - robust mapping for both UUID and short names
     let bgMusicFilePath: string | null = null;
     let crackleFilePath: string | null = path.join(process.cwd(), 'public', 'audio', 'crackle-vintage.mp3');
 
     if (!fs.existsSync(crackleFilePath)) {
-      crackleFilePath = null;
+      console.warn(`[API] Crackle file not found at ${crackleFilePath}, trying alternative`);
+      const altCrackle = path.join(process.cwd(), 'public', 'audio', 'crackle-vintage.mp3');
+      crackleFilePath = fs.existsSync(altCrackle) ? altCrackle : null;
+    } else {
+      console.log(`[API] Crackle file found: ${crackleFilePath}`);
     }
 
-    if (bgMusicId && bgMusicId !== 'none') {
-      const allAssets = await getAudioAssets();
-      const asset = allAssets.find((a) => a.id === bgMusicId || a.file_url.includes(bgMusicId));
-      if (asset && asset.file_url.startsWith('/')) {
-        const resolved = path.join(process.cwd(), 'public', asset.file_url);
-        if (fs.existsSync(resolved)) bgMusicFilePath = resolved;
+    // Map short names to actual files for reliability
+    const BG_SHORT_MAP: Record<string, string> = {
+      'rain': '/audio/bg-rain.mp3',
+      'accordion': '/audio/bg-accordion.mp3',
+      'guitar': '/audio/bg-guitar.mp3',
+      'cello': '/audio/bg-cello.mp3',
+      'a2222222-2222-2222-2222-222222222222': '/audio/bg-rain.mp3',
+      'a3333333-3333-3333-3333-333333333333': '/audio/bg-accordion.mp3',
+      'a4444444-4444-4444-4444-444444444444': '/audio/bg-guitar.mp3',
+      'a5555555-5555-5555-5555-555555555555': '/audio/bg-cello.mp3',
+    };
+
+    if (bgMusicId && bgMusicId !== 'none' && bgMusicId !== 'null' && bgMusicId !== '') {
+      const normalizedId = bgMusicId.toLowerCase().trim();
+      
+      // First check short map
+      if (BG_SHORT_MAP[normalizedId]) {
+        const mappedUrl = BG_SHORT_MAP[normalizedId];
+        const resolved = path.join(process.cwd(), 'public', mappedUrl);
+        if (fs.existsSync(resolved)) {
+          bgMusicFilePath = resolved;
+          console.log(`[API] BG music resolved via short map: ${bgMusicId} -> ${resolved}`);
+        }
+      } else if (BG_SHORT_MAP[bgMusicId]) {
+        const mappedUrl = BG_SHORT_MAP[bgMusicId];
+        const resolved = path.join(process.cwd(), 'public', mappedUrl);
+        if (fs.existsSync(resolved)) {
+          bgMusicFilePath = resolved;
+          console.log(`[API] BG music resolved via exact short map: ${bgMusicId} -> ${resolved}`);
+        }
+      } else {
+        // Try DB lookup
+        const allAssets = await getAudioAssets();
+        const asset = allAssets.find((a) => 
+          a.id === bgMusicId || 
+          a.id.toLowerCase() === normalizedId ||
+          a.file_url.toLowerCase().includes(normalizedId) ||
+          a.title.toLowerCase().includes(normalizedId)
+        );
+        if (asset && asset.file_url) {
+          const fileUrl = asset.file_url.startsWith('/') ? asset.file_url : `/${asset.file_url}`;
+          const resolved = path.join(process.cwd(), 'public', fileUrl);
+          if (fs.existsSync(resolved)) {
+            bgMusicFilePath = resolved;
+            console.log(`[API] BG music resolved via DB: ${bgMusicId} -> ${asset.title} -> ${resolved}`);
+          } else {
+            console.warn(`[API] BG asset found but file missing: ${resolved}`);
+            // Try alternative public path
+            const altPath = path.join(process.cwd(), 'public', 'audio', path.basename(fileUrl));
+            if (fs.existsSync(altPath)) {
+              bgMusicFilePath = altPath;
+              console.log(`[API] BG music fallback found: ${altPath}`);
+            }
+          }
+        } else {
+          // Last resort: try direct file in public/audio
+          const directTry = path.join(process.cwd(), 'public', 'audio', `bg-${normalizedId}.mp3`);
+          if (fs.existsSync(directTry)) {
+            bgMusicFilePath = directTry;
+            console.log(`[API] BG music resolved via direct file: ${directTry}`);
+          } else {
+            console.warn(`[API] BG music ID not resolved: ${bgMusicId}, available assets: ${allAssets.map(a=>a.id+':'+a.file_url).join(', ')}`);
+          }
+        }
       }
+    } else {
+      console.log(`[API] No BG music requested (id=${bgMusicId})`);
     }
+
+    console.log(`[API] Final resolved paths - BG: ${bgMusicFilePath || 'NONE'}, Crackle: ${crackleFilePath || 'NONE'}`);
 
     // 2. Synthesize audio via FFmpeg
     const { durationSeconds } = await processAudioTrack({

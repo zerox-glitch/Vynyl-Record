@@ -57,7 +57,7 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
           <Music className="w-4 h-4 text-amber-500" />
           <span>Ambient Background Atmosphere</span>
         </label>
-        <span className="text-xs text-stone-400">Layered at 18% master mix</span>
+        <span className="text-xs text-stone-400">Layered at 26% • Baked into MP3 • Always audible</span>
       </div>
 
       <div className="space-y-2">
