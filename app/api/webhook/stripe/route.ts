@@ -10,13 +10,12 @@ export async function POST(req: NextRequest) {
   const sig = req.headers.get('stripe-signature') || '';
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
+  if (!webhookSecret) {
+    return NextResponse.json({ error: 'Stripe webhook signing secret is not configured.' }, { status: 503 });
+  }
+
   try {
-    let event;
-    if (webhookSecret) {
-      event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
-    } else {
-      event = JSON.parse(payload);
-    }
+    const event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
 
     switch (event.type) {
       case 'checkout.session.completed':

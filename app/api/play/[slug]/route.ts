@@ -17,13 +17,13 @@ export async function GET(
     }
 
     // Increment view count asynchronously
-    await incrementRecordingViews(slug);
+    const views = await incrementRecordingViews(slug);
 
     return NextResponse.json({
       success: true,
       recording: {
         ...recording,
-        views: (recording.views || 0) + 1,
+        views,
       },
     });
   } catch (error: any) {

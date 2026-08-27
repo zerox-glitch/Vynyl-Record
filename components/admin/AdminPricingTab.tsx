@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { PricingPlan, FilterPresetType, VinylStyleType } from '@/types';
+import { AudioAsset, PricingPlan, FilterPresetType, VinylStyleType } from '@/types';
 import { Button } from '@/components/ui/Button';
 import { Plus, Edit2, Check, Lock, Save, DollarSign, Clock, Disc3 } from 'lucide-react';
 import { VINYL_STYLES, FILTER_PRESETS } from '@/lib/constants';
@@ -10,11 +10,13 @@ import toast from 'react-hot-toast';
 interface AdminPricingTabProps {
   plans: PricingPlan[];
   onSavePlan: (plan: PricingPlan) => Promise<void>;
+  audioAssets: AudioAsset[];
 }
 
 export const AdminPricingTab: React.FC<AdminPricingTabProps> = ({
   plans,
   onSavePlan,
+  audioAssets,
 }) => {
   const [editingPlan, setEditingPlan] = useState<PricingPlan | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -25,13 +27,13 @@ export const AdminPricingTab: React.FC<AdminPricingTabProps> = ({
 
   const handleCreateNew = () => {
     const newPlan: PricingPlan = {
-      id: `plan-${Date.now()}`,
+      id: crypto.randomUUID(),
       name: 'Custom Collector Plan',
       price_cents: 1500,
       stripe_price_id: 'price_custom',
       max_duration_seconds: 300,
       allowed_filter_presets: ['clean', 'gramophone', 'radio'],
-      allowed_bg_music_ids: ['none', 'rain'],
+      allowed_bg_music_ids: ['all'],
       allowed_vinyl_styles: ['classic_red', 'midnight_blue'],
       can_adjust_crackle: true,
       is_active: true,
@@ -74,6 +76,18 @@ export const AdminPricingTab: React.FC<AdminPricingTabProps> = ({
     setEditingPlan({ ...editingPlan, allowed_vinyl_styles: next });
   };
 
+  const toggleBackgroundMusic = (assetId: string) => {
+    if (!editingPlan) return;
+    const backgroundIds = audioAssets.filter((asset) => asset.category === 'bg_music').map((asset) => asset.id);
+    const current = editingPlan.allowed_bg_music_ids.includes('all')
+      ? ['none', ...backgroundIds]
+      : editingPlan.allowed_bg_music_ids;
+    const next = current.includes(assetId)
+      ? current.filter((id) => id !== assetId)
+      : [...current, assetId];
+    setEditingPlan({ ...editingPlan, allowed_bg_music_ids: next });
+  };
+
   return (
     <div className="space-y-8">
       {/* Plans List Table */}
@@ -84,7 +98,7 @@ export const AdminPricingTab: React.FC<AdminPricingTabProps> = ({
               Active Pricing Tiers & Duration Limits
             </h3>
             <p className="text-xs text-stone-400">
-              Manage plans, duration caps, allowed filter presets, and Stripe IDs
+              Manage plan availability, duration caps, and allowed studio features
             </p>
           </div>
           <Button
@@ -263,16 +277,53 @@ export const AdminPricingTab: React.FC<AdminPricingTabProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-4 border-t border-stone-800">
-            <label className="flex items-center gap-2 text-xs text-stone-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={editingPlan.can_adjust_crackle}
-                onChange={(e) => setEditingPlan({ ...editingPlan, can_adjust_crackle: e.target.checked })}
-                className="rounded accent-amber-500"
-              />
-              <span>Can Adjust Vinyl Crackle Intensity</span>
+          <div className="space-y-2">
+            <label className="block text-xs font-mono text-stone-300">
+              Allowed Background Music
             </label>
+            <div className="flex flex-wrap gap-2">
+              {audioAssets.filter((asset) => asset.category === 'bg_music').map((asset) => {
+                const isSelected = editingPlan.allowed_bg_music_ids.includes('all') || editingPlan.allowed_bg_music_ids.includes(asset.id);
+                return (
+                  <button
+                    key={asset.id}
+                    type="button"
+                    onClick={() => toggleBackgroundMusic(asset.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium border flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-amber-600/20 border-amber-500 text-amber-200'
+                        : 'bg-stone-950 border-stone-800 text-stone-400'
+                    }`}
+                  >
+                    {isSelected && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                    <span>{asset.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t border-stone-800">
+            <div className="flex flex-wrap items-center gap-5">
+              <label className="flex items-center gap-2 text-xs text-stone-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editingPlan.can_adjust_crackle}
+                  onChange={(e) => setEditingPlan({ ...editingPlan, can_adjust_crackle: e.target.checked })}
+                  className="rounded accent-amber-500"
+                />
+                <span>Can Adjust Vinyl Crackle Intensity</span>
+              </label>
+              <label className="flex items-center gap-2 text-xs text-stone-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editingPlan.is_active}
+                  onChange={(e) => setEditingPlan({ ...editingPlan, is_active: e.target.checked })}
+                  className="rounded accent-emerald-500"
+                />
+                <span>Plan Available to Customers</span>
+              </label>
+            </div>
 
             <Button
               type="submit"

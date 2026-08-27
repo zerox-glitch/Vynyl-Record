@@ -150,7 +150,7 @@ export default function PlayRecordingPage() {
     player.play(startTime);
   };
 
-  const handleCopyLink = () => {
+  const handleCopyLink = async () => {
     const url = typeof window !== 'undefined' ? window.location.href : '';
     navigator.clipboard
       .writeText(url)
@@ -172,7 +172,7 @@ export default function PlayRecordingPage() {
   const styleConfig = VINYL_STYLES.find((s) => s.id === recording?.vinyl_style) || VINYL_STYLES[0];
   const filterConfig = FILTER_PRESETS.find((f) => f.id === recording?.filter_preset) || FILTER_PRESETS[1];
 
-  if (loading || !recording) {
+  if (loading) {
     return (
       <div className="flex min-h-screen flex-col justify-between bg-[#0c0a09] text-stone-100">
         <Navbar />
@@ -182,6 +182,25 @@ export default function PlayRecordingPage() {
           </div>
           <p className="font-serif text-sm text-amber-200">Lifting the record from its sleeve…</p>
         </div>
+        <Footer />
+      </div>
+    );
+  }
+
+  if (!recording) {
+    return (
+      <div className="min-h-screen bg-[#0c0a09] flex flex-col text-stone-100">
+        <Navbar />
+        <main className="flex-1 flex flex-col items-center justify-center gap-5 px-6 text-center">
+          <Disc3 className="w-14 h-14 text-stone-600" />
+          <div>
+            <h1 className="text-2xl font-serif font-bold text-amber-100">Recording unavailable</h1>
+            <p className="mt-2 text-sm text-stone-400">This vinyl note does not exist or has been removed.</p>
+          </div>
+          <Link href="/">
+            <Button variant="primary" size="md">Return to the archive</Button>
+          </Link>
+        </main>
         <Footer />
       </div>
     );

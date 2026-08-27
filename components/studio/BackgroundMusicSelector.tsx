@@ -12,6 +12,7 @@ interface BackgroundMusicSelectorProps {
   onChange: (id: string | null) => void;
   isPremium?: boolean;
   onTriggerUpgrade?: () => void;
+  allowedAssetIds?: string[];
 }
 
 export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = ({
@@ -20,6 +21,7 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
   onChange,
   isPremium = false,
   onTriggerUpgrade,
+  allowedAssetIds,
 }) => {
   const [playingPreview, setPlayingPreview] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -35,15 +37,19 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
     } else {
       if (audioRef.current) {
         audioRef.current.src = asset.file_url;
-        audioRef.current.play().catch(() => {});
-        setPlayingPreview(asset.id);
+        audioRef.current.play()
+          .then(() => setPlayingPreview(asset.id))
+          .catch(() => {
+            setPlayingPreview(null);
+            toast.error('This background preview is unavailable.');
+          });
       }
     }
   };
 
   const handleSelect = (assetId: string | null, isLocked: boolean = false) => {
-    if (isLocked && !isPremium) {
-      toast('Unlocked with Gold Master Plan', { icon: '👑' });
+    if (isLocked) {
+      toast('This track is not included in the active plan', { icon: '👑' });
       if (onTriggerUpgrade) onTriggerUpgrade();
       return;
     }
@@ -57,7 +63,7 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
           <Music className="w-4 h-4 text-amber-500" />
           <span>Ambient Background Atmosphere</span>
         </label>
-        <span className="text-xs text-stone-400">Layered at 26% • Baked into MP3 • Always audible</span>
+        <span className="text-xs text-stone-400">Baked into MP3 • Always audible</span>
       </div>
 
       <div className="space-y-2">
@@ -89,7 +95,8 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
         {/* Dynamic List from DB */}
         {bgAssets.map((asset) => {
           const isSelected = selectedBgMusicId === asset.id;
-          const isLocked = asset.is_premium_only && !isPremium;
+          const isAllowedByPlan = !allowedAssetIds || allowedAssetIds.includes(asset.id) || allowedAssetIds.includes('all');
+          const isLocked = !isAllowedByPlan || (asset.is_premium_only && !isPremium);
           const isPlaying = playingPreview === asset.id;
 
           return (

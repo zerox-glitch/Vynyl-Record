@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Disc3, Mic, Sparkles, Shield, Menu, X, Music } from 'lucide-react';
+import { Disc3, Mic, Sparkles, Menu, X, Music } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Button } from './Button';
 
@@ -16,7 +16,6 @@ export const Navbar: React.FC = () => {
     { href: '/#experience', label: 'Sound Lab', icon: <Music className="w-4 h-4 text-amber-500" /> },
     { href: '/#memories', label: 'Master Vault', icon: <Sparkles className="w-4 h-4 text-amber-500" /> },
     { href: '/#pricing', label: 'Pricing Plans', icon: null },
-    { href: '/admin', label: 'Admin Ops', icon: <Shield className="w-4 h-4 text-amber-500" /> },
   ];
 
   return (

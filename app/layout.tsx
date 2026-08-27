@@ -1,7 +1,10 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
+import { getSiteSettings } from '@/lib/db';
 import { Analytics } from '@vercel/analytics/next';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'Vinyl Voice Notes — Preserve Your Voice in Digital Wax',
@@ -38,11 +41,17 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const settings = await getSiteSettings();
+  const themeStyle = {
+    '--bg-obsidian': settings.branding_theme.bg_color,
+    '--amber-primary': settings.branding_theme.primary_color,
+    '--amber-accent': settings.branding_theme.accent_color,
+  } as React.CSSProperties;
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
@@ -66,8 +75,8 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
       </head>
-      <body className="bg-[#0c0a09] text-stone-100 antialiased selection:bg-amber-600 selection:text-white">
-        <div className="film-grain" />
+      <body style={themeStyle} className="text-stone-100 antialiased selection:bg-amber-600 selection:text-white">
+        {settings.branding_theme.enable_grain_overlay && <div className="film-grain" />}
         <Toaster
           position="bottom-right"
           toastOptions={{

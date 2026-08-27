@@ -9,6 +9,7 @@ import { AudioRecorder } from '@/components/studio/AudioRecorder';
 import { FilterSelector } from '@/components/studio/FilterSelector';
 import { BackgroundMusicSelector } from '@/components/studio/BackgroundMusicSelector';
 import { CrackleSlider } from '@/components/studio/CrackleSlider';
+import { AnalogMixerControls } from '@/components/studio/AnalogMixerControls';
 import { VinylStyleSelector } from '@/components/studio/VinylStyleSelector';
 import { LatheProcessingModal } from '@/components/studio/LatheProcessingModal';
 import { StripeUpgradeModal } from '@/components/studio/StripeUpgradeModal';
@@ -59,13 +60,25 @@ function StudioContent() {
   // Audio & Vinyl Settings
   const [filterPreset, setFilterPreset] = useState<FilterPresetType>('gramophone');
   const [selectedBgMusicId, setSelectedBgMusicId] = useState<string | null>('a2222222-2222-2222-2222-222222222222');
-  const [crackleIntensity, setCrackleIntensity] = useState<number>(0.22);
+  const [crackleIntensity, setCrackleIntensity] = useState<number>(0.15);
+  const [crackleAssetId, setCrackleAssetId] = useState<string | null>(null);
+  const [bgMusicVolume, setBgMusicVolume] = useState<number>(0.3);
+  const [hissIntensity, setHissIntensity] = useState<number>(0.08);
+  const [rumbleIntensity, setRumbleIntensity] = useState<number>(0.05);
+  const [soundEffectId, setSoundEffectId] = useState<string | null>('a6666666-6666-6666-6666-666666666666');
+  const [soundEffectVolume, setSoundEffectVolume] = useState<number>(0.6);
+  const [musicClarity, setMusicClarity] = useState<number>(0.75);
+  const [crackleBrightness, setCrackleBrightness] = useState<number>(0.65);
+  const [voiceWarmth, setVoiceWarmth] = useState<number>(0.45);
+  const [voicePresence, setVoicePresence] = useState<number>(0.5);
+  const [wowFlutter, setWowFlutter] = useState<number>(0.12);
+  const [introDelay, setIntroDelay] = useState<number>(1.15);
   const [vinylStyle, setVinylStyle] = useState<VinylStyleType>('classic_red');
 
   // Dynamic Data & Plans
   const [audioAssets, setAudioAssets] = useState<AudioAsset[]>(DEFAULT_AUDIO_ASSETS);
   const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>(DEFAULT_PRICING_PLANS);
-  const [isPremium, setIsPremium] = useState<boolean>(false);
+  const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
   // Modals & Lathe Processing
   const [isProcessingModalOpen, setIsProcessingModalOpen] = useState<boolean>(false);
@@ -73,14 +86,29 @@ function StudioContent() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Check if user upgraded via URL param
+  // Restore the selected tier and verify completed checkout redirects.
   useEffect(() => {
-    if (searchParams.get('upgraded') === 'true') {
-      setIsPremium(true);
-      toast.success('🎉 Gold Master tier unlocked! Extended minutes & all styles enabled.');
-      confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+    const storedPlanId = window.localStorage.getItem('vynyl_active_plan_id');
+    if (storedPlanId) {
+      setActivePlanId(storedPlanId);
     }
-  }, [searchParams]);
+
+    const sessionId = searchParams.get('session_id');
+    const planId = searchParams.get('plan');
+    if (!sessionId || !planId) return;
+
+    fetch(`/api/checkout?session_id=${encodeURIComponent(sessionId)}&plan=${encodeURIComponent(planId)}`)
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok || !data.verified) throw new Error(data.error || 'Payment verification failed');
+        setActivePlanId(data.planId);
+        window.localStorage.setItem('vynyl_active_plan_id', data.planId);
+        toast.success('🎉 Gold Master tier unlocked!');
+        confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+        router.replace('/studio');
+      })
+      .catch((error) => toast.error(error.message));
+  }, [router, searchParams]);
 
   // Load Audio Assets & Pricing Plans
   useEffect(() => {
@@ -119,7 +147,8 @@ function StudioContent() {
     setRecordingState(state);
   };
 
-  const currentPlan = pricingPlans.find((p) => (isPremium ? p.price_cents > 0 : p.price_cents === 0)) || pricingPlans[0];
+  const currentPlan = pricingPlans.find((p) => p.id === activePlanId) || pricingPlans.find((p) => p.price_cents === 0) || pricingPlans[0];
+  const isPremium = Boolean(currentPlan && currentPlan.price_cents > 0);
   const maxDuration = currentPlan?.max_duration_seconds || 60;
   const isOverDurationLimit = !isPremium && recordedDuration > maxDuration;
 
@@ -135,6 +164,7 @@ function StudioContent() {
       return;
     }
 
+    let stepInterval: ReturnType<typeof setInterval> | null = null;
     try {
       setIsSubmitting(true);
       setIsProcessingModalOpen(true);
@@ -142,19 +172,32 @@ function StudioContent() {
 
       // Prepare payload
       const formData = new FormData();
-      formData.append('audio', audioBlob, 'voice.webm');
+      const sourceName = audioBlob instanceof File ? audioBlob.name : audioBlob.type.includes('mp4') ? 'voice.m4a' : 'voice.webm';
+      formData.append('audio', audioBlob, sourceName);
       formData.append('title', title.trim());
       formData.append('recipientName', recipientName.trim());
       formData.append('senderName', senderName.trim());
       formData.append('filterPreset', filterPreset);
       formData.append('crackleIntensity', crackleIntensity.toString());
       formData.append('bgMusicId', selectedBgMusicId || 'none');
+      formData.append('bgMusicVolume', bgMusicVolume.toString());
+      formData.append('crackleAssetId', crackleAssetId || 'default');
+      formData.append('hissIntensity', hissIntensity.toString());
+      formData.append('rumbleIntensity', rumbleIntensity.toString());
+      formData.append('soundEffectId', soundEffectId || 'none');
+      formData.append('soundEffectVolume', soundEffectVolume.toString());
+      formData.append('musicClarity', musicClarity.toString());
+      formData.append('crackleBrightness', crackleBrightness.toString());
+      formData.append('voiceWarmth', voiceWarmth.toString());
+      formData.append('voicePresence', voicePresence.toString());
+      formData.append('wowFlutter', wowFlutter.toString());
+      formData.append('introDelay', introDelay.toString());
       formData.append('vinylStyle', vinylStyle);
       // Tell the engine the plan ceiling so a runaway upload can't be mastered.
       formData.append('maxSeconds', String(maxDuration + 5));
 
       // Progress animation simulation while waiting for API
-      const stepInterval = setInterval(() => {
+      stepInterval = setInterval(() => {
         setLatheStepIndex((prev) => {
           if (prev < 3) return prev + 1;
           return prev;
@@ -167,6 +210,7 @@ function StudioContent() {
       });
 
       clearInterval(stepInterval);
+      stepInterval = null;
 
       if (!res.ok) {
         const errorData = await res.json();
@@ -191,6 +235,8 @@ function StudioContent() {
       setIsProcessingModalOpen(false);
       setIsSubmitting(false);
       toast.error(err.message || 'Failed to press digital wax record.');
+    } finally {
+      if (stepInterval) clearInterval(stepInterval);
     }
   };
 
@@ -365,15 +411,21 @@ function StudioContent() {
               onChange={setFilterPreset}
               isPremium={isPremium}
               onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
+              allowedPresets={currentPlan?.allowed_filter_presets}
             />
 
             {/* 2. Background Atmosphere Selector */}
             <BackgroundMusicSelector
               assets={audioAssets}
               selectedBgMusicId={selectedBgMusicId}
-              onChange={setSelectedBgMusicId}
+              onChange={(id) => {
+                setSelectedBgMusicId(id);
+                const asset = audioAssets.find((item) => item.id === id);
+                if (asset?.default_volume !== undefined) setBgMusicVolume(asset.default_volume);
+              }}
               isPremium={isPremium}
               onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
+              allowedAssetIds={currentPlan?.allowed_bg_music_ids}
             />
 
             {/* 3. Vinyl Surface Noise & Crackle Slider */}
@@ -384,12 +436,50 @@ function StudioContent() {
               onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
             />
 
+            <AnalogMixerControls
+              assets={audioAssets}
+              bgMusicVolume={bgMusicVolume}
+              onBgMusicVolumeChange={setBgMusicVolume}
+              crackleAssetId={crackleAssetId}
+              onCrackleAssetChange={(id) => {
+                setCrackleAssetId(id);
+                const asset = audioAssets.find((item) => item.id === id);
+                if (asset?.default_volume !== undefined) setCrackleIntensity(asset.default_volume);
+              }}
+              hissIntensity={hissIntensity}
+              onHissChange={setHissIntensity}
+              rumbleIntensity={rumbleIntensity}
+              onRumbleChange={setRumbleIntensity}
+              soundEffectId={soundEffectId}
+              onSoundEffectChange={(id) => {
+                setSoundEffectId(id);
+                const asset = audioAssets.find((item) => item.id === id);
+                if (asset?.default_volume !== undefined) setSoundEffectVolume(asset.default_volume);
+              }}
+              soundEffectVolume={soundEffectVolume}
+              onSoundEffectVolumeChange={setSoundEffectVolume}
+              musicClarity={musicClarity}
+              onMusicClarityChange={setMusicClarity}
+              crackleBrightness={crackleBrightness}
+              onCrackleBrightnessChange={setCrackleBrightness}
+              voiceWarmth={voiceWarmth}
+              onVoiceWarmthChange={setVoiceWarmth}
+              voicePresence={voicePresence}
+              onVoicePresenceChange={setVoicePresence}
+              wowFlutter={wowFlutter}
+              onWowFlutterChange={setWowFlutter}
+              introDelay={introDelay}
+              onIntroDelayChange={setIntroDelay}
+              isPremium={isPremium}
+            />
+
             {/* 4. Vinyl Disc Edition / Color */}
             <VinylStyleSelector
               selectedStyle={vinylStyle}
               onChange={setVinylStyle}
               isPremium={isPremium}
               onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
+              allowedStyles={currentPlan?.allowed_vinyl_styles}
             />
 
             {/* Submit & Press Action */}
@@ -439,7 +529,10 @@ function StudioContent() {
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
         plans={pricingPlans}
-        onSuccessUpgrade={() => setIsPremium(true)}
+        onSuccessUpgrade={(planId) => {
+          setActivePlanId(planId);
+          window.localStorage.setItem('vynyl_active_plan_id', planId);
+        }}
       />
     </main>
   );

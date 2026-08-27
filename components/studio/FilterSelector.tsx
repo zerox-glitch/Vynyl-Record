@@ -12,6 +12,7 @@ interface FilterSelectorProps {
   onChange: (filter: FilterPresetType) => void;
   isPremium?: boolean;
   onTriggerUpgrade?: () => void;
+  allowedPresets?: FilterPresetType[];
 }
 
 export const FilterSelector: React.FC<FilterSelectorProps> = ({
@@ -19,15 +20,16 @@ export const FilterSelector: React.FC<FilterSelectorProps> = ({
   onChange,
   isPremium = false,
   onTriggerUpgrade,
+  allowedPresets,
 }) => {
   const [playingPreview, setPlayingPreview] = useState<FilterPresetType | null>(null);
   const audioPreviewRef = React.useRef<HTMLAudioElement | null>(null);
 
   const previewAudioMap: Record<FilterPresetType, string> = {
-    clean: '/audio/demo-raw-sample.mp3',
-    gramophone: '/audio/demo-gramophone-sample.mp3',
-    radio: '/audio/demo-voice-ocean.mp3',
-    tape: '/audio/demo-lofi-sample.mp3',
+    clean: '/audio/demo-raw-sample.mp3?v=3',
+    gramophone: '/audio/demo-gramophone-sample.mp3?v=3',
+    radio: '/audio/demo-voice-ocean.mp3?v=3',
+    tape: '/audio/demo-lofi-sample.mp3?v=3',
   };
 
   const handleTogglePreview = (presetId: FilterPresetType, e: React.MouseEvent) => {
@@ -39,14 +41,18 @@ export const FilterSelector: React.FC<FilterSelectorProps> = ({
     } else {
       if (audioPreviewRef.current) {
         audioPreviewRef.current.src = previewAudioMap[presetId];
-        audioPreviewRef.current.play().catch(() => {});
-        setPlayingPreview(presetId);
+        audioPreviewRef.current.play()
+          .then(() => setPlayingPreview(presetId))
+          .catch(() => {
+            setPlayingPreview(null);
+            toast.error('This filter preview is unavailable.');
+          });
       }
     }
   };
 
   const handleSelect = (preset: typeof FILTER_PRESETS[0]) => {
-    if (preset.isPremium && !isPremium) {
+    if ((allowedPresets && !allowedPresets.includes(preset.id)) || (preset.isPremium && !isPremium)) {
       toast('Unlocked on Gold Master Tier', { icon: '✨' });
       if (onTriggerUpgrade) onTriggerUpgrade();
       return;
@@ -67,7 +73,7 @@ export const FilterSelector: React.FC<FilterSelectorProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {FILTER_PRESETS.map((preset) => {
           const isSelected = selectedFilter === preset.id;
-          const isLocked = preset.isPremium && !isPremium;
+          const isLocked = (allowedPresets && !allowedPresets.includes(preset.id)) || (preset.isPremium && !isPremium);
           const isAudioActive = playingPreview === preset.id;
 
           return (

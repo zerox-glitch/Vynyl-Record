@@ -96,12 +96,6 @@ export const Footer: React.FC = () => {
             </h4>
             <ul className="space-y-2 text-xs">
               <li>
-                <Link href="/admin" className="hover:text-amber-300 transition-colors flex items-center gap-1.5">
-                  <Shield className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Admin Operations Hub</span>
-                </Link>
-              </li>
-              <li>
                 <button
                   onClick={() => setTermsModalOpen(true)}
                   className="hover:text-amber-300 transition-colors"

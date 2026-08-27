@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { SiteSettings } from '@/types';
 import { Button } from '@/components/ui/Button';
 import { Save, Sparkles, Palette, HelpCircle, Plus, Trash2 } from 'lucide-react';
@@ -14,6 +14,10 @@ interface AdminCmsTabProps {
 export const AdminCmsTab: React.FC<AdminCmsTabProps> = ({ settings, onSave }) => {
   const [formData, setFormData] = useState<SiteSettings>(settings);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  useEffect(() => {
+    setFormData(settings);
+  }, [settings]);
 
   const handleHeadlineChange = (val: string) => {
     setFormData((prev) => ({

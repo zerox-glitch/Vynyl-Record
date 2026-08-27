@@ -3,11 +3,8 @@ import Stripe from 'stripe';
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder_key';
 
 export const isStripeConfigured = () => {
-  return (
-    process.env.STRIPE_SECRET_KEY &&
-    process.env.STRIPE_SECRET_KEY.startsWith('sk_') &&
-    process.env.STRIPE_SECRET_KEY !== 'sk_test_your_stripe_secret_key'
-  );
+  const key = process.env.STRIPE_SECRET_KEY || '';
+  return Boolean(key.startsWith('sk_') && !key.includes('your_') && !key.includes('placeholder'));
 };
 
 export const stripe = new Stripe(stripeSecretKey, {
@@ -22,6 +19,7 @@ export async function createCheckoutSession({
   successUrl,
   cancelUrl,
   customerEmail,
+  isRecurring,
 }: {
   planId: string;
   planName: string;
@@ -29,12 +27,14 @@ export async function createCheckoutSession({
   successUrl: string;
   cancelUrl: string;
   customerEmail?: string;
+  isRecurring?: boolean;
 }) {
   if (!isStripeConfigured()) {
     // Return simulated checkout URL for development/demo test mode
+    const sessionId = `demo_session_${Date.now()}`;
     return {
-      url: `${successUrl}${successUrl.includes('?') ? '&' : '?'}session_id=demo_session_${Date.now()}&plan=${planId}`,
-      sessionId: `demo_session_${Date.now()}`,
+      url: successUrl.replace('{CHECKOUT_SESSION_ID}', sessionId),
+      sessionId,
     };
   }
 
@@ -50,11 +50,12 @@ export async function createCheckoutSession({
             images: ['https://images.unsplash.com/photo-1539185441755-769473a23570?auto=format&fit=crop&w=800&q=80'],
           },
           unit_amount: priceCents,
+          ...(isRecurring ? { recurring: { interval: 'month' as const } } : {}),
         },
         quantity: 1,
       },
     ],
-    mode: 'payment',
+    mode: isRecurring ? 'subscription' : 'payment',
     customer_email: customerEmail || undefined,
     success_url: successUrl,
     cancel_url: cancelUrl,

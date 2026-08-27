@@ -12,6 +12,7 @@ interface VinylStyleSelectorProps {
   onChange: (style: VinylStyleType) => void;
   isPremium?: boolean;
   onTriggerUpgrade?: () => void;
+  allowedStyles?: VinylStyleType[];
 }
 
 export const VinylStyleSelector: React.FC<VinylStyleSelectorProps> = ({
@@ -19,9 +20,10 @@ export const VinylStyleSelector: React.FC<VinylStyleSelectorProps> = ({
   onChange,
   isPremium = false,
   onTriggerUpgrade,
+  allowedStyles,
 }) => {
   const handleSelect = (style: typeof VINYL_STYLES[0]) => {
-    if (style.isPremium && !isPremium) {
+    if ((allowedStyles && !allowedStyles.includes(style.id)) || (style.isPremium && !isPremium)) {
       toast('Unlocked on Gold Master Tier', { icon: '✨' });
       if (onTriggerUpgrade) onTriggerUpgrade();
       return;
@@ -42,7 +44,7 @@ export const VinylStyleSelector: React.FC<VinylStyleSelectorProps> = ({
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
         {VINYL_STYLES.map((style) => {
           const isSelected = selectedStyle === style.id;
-          const isLocked = style.isPremium && !isPremium;
+          const isLocked = (allowedStyles && !allowedStyles.includes(style.id)) || (style.isPremium && !isPremium);
 
           return (
             <div

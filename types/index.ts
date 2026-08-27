@@ -62,6 +62,8 @@ export interface AudioAsset {
   category: AudioCategory;
   file_url: string;
   is_premium_only: boolean;
+  is_enabled?: boolean;
+  default_volume?: number;
   created_at: string;
   duration?: number;
 }

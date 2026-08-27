@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { PricingPlan } from '@/types';
@@ -11,7 +11,7 @@ interface StripeUpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
   plans: PricingPlan[];
-  onSuccessUpgrade?: () => void;
+  onSuccessUpgrade?: (planId: string) => void;
 }
 
 export const StripeUpgradeModal: React.FC<StripeUpgradeModalProps> = ({
@@ -27,7 +27,17 @@ export const StripeUpgradeModal: React.FC<StripeUpgradeModalProps> = ({
 
   const premiumPlans = plans.filter((p) => p.price_cents > 0);
 
+  useEffect(() => {
+    if (!premiumPlans.some((plan) => plan.id === selectedPlanId)) {
+      setSelectedPlanId(premiumPlans[0]?.id || '');
+    }
+  }, [premiumPlans, selectedPlanId]);
+
   const handleCheckout = async () => {
+    if (!selectedPlanId) {
+      toast.error('No paid plan is currently available.');
+      return;
+    }
     try {
       setIsLoading(true);
       const res = await fetch('/api/checkout', {
@@ -40,7 +50,7 @@ export const StripeUpgradeModal: React.FC<StripeUpgradeModalProps> = ({
       if (data.url) {
         if (data.sessionId?.startsWith('demo_session_')) {
           toast.success('✨ Plan unlocked in demo preview mode!');
-          if (onSuccessUpgrade) onSuccessUpgrade();
+          if (onSuccessUpgrade) onSuccessUpgrade(selectedPlanId);
           onClose();
         } else {
           window.location.href = data.url;

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { AudioAsset, AudioCategory } from '@/types';
 import { Button } from '@/components/ui/Button';
 import { 
@@ -22,12 +22,14 @@ interface AdminAudioStudioTabProps {
   assets: AudioAsset[];
   onAssetAdded: (asset: AudioAsset) => void;
   onAssetDeleted: (id: string) => void;
+  onAssetUpdated: (asset: AudioAsset) => void;
 }
 
 export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
   assets,
   onAssetAdded,
   onAssetDeleted,
+  onAssetUpdated,
 }) => {
   // Upload State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -49,6 +51,7 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
   const playerRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
   const micChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -93,6 +96,7 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
   const startMicRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       micChunksRef.current = [];
@@ -105,7 +109,10 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
         const blob = new Blob(micChunksRef.current, { type: 'audio/webm' });
         setRecordedBlob(blob);
         const url = URL.createObjectURL(blob);
-        setMicPreviewUrl(url);
+        setMicPreviewUrl((previousUrl) => {
+          if (previousUrl) URL.revokeObjectURL(previousUrl);
+          return url;
+        });
       };
 
       recorder.start(100);
@@ -125,6 +132,8 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
     if (mediaRecorderRef.current && isRecordingMic) {
       mediaRecorderRef.current.stop();
       if (timerRef.current) clearInterval(timerRef.current);
+      micStreamRef.current?.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
       setIsRecordingMic(false);
       toast.success('Sound effect recorded! Preview or save to library.');
     }
@@ -155,7 +164,12 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
         toast.success(`Microphone asset "${data.asset.title}" saved!`);
         onAssetAdded(data.asset);
         setRecordedBlob(null);
-        setMicPreviewUrl(null);
+        setMicPreviewUrl((previousUrl) => {
+          if (previousUrl) URL.revokeObjectURL(previousUrl);
+          return null;
+        });
+      } else {
+        throw new Error(data.error || 'Failed to save recording');
       }
     } catch (err: any) {
       toast.error(err.message || 'Failed to save recording');
@@ -171,10 +185,34 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
       if (res.ok) {
         onAssetDeleted(id);
         toast.success('Audio asset removed');
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to delete asset');
       }
     } catch (err: any) {
-      toast.error('Failed to delete asset');
+      toast.error(err.message || 'Failed to delete asset');
     }
+  };
+
+  const updateAsset = async (id: string, updates: Partial<AudioAsset>) => {
+    try {
+      const res = await fetch('/api/audio/upload-asset', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, updates }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Update failed');
+      onAssetUpdated(data.asset);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update asset');
+    }
+  };
+
+  const setCategoryEnabled = async (category: AudioCategory, enabled: boolean) => {
+    const matching = assets.filter((asset) => asset.category === category);
+    await Promise.all(matching.map((asset) => updateAsset(asset.id, { is_enabled: enabled })));
+    toast.success(`${category.replace('_', ' ')} sounds ${enabled ? 'enabled' : 'disabled'}`);
   };
 
   const togglePlayAsset = (asset: AudioAsset) => {
@@ -184,11 +222,24 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
     } else {
       if (playerRef.current) {
         playerRef.current.src = asset.file_url;
-        playerRef.current.play().catch(() => {});
-        setPlayingAssetId(asset.id);
+        playerRef.current.play()
+          .then(() => setPlayingAssetId(asset.id))
+          .catch(() => {
+            setPlayingAssetId(null);
+            toast.error('This audio asset is unavailable.');
+          });
       }
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+      micStreamRef.current?.getTracks().forEach((track) => track.stop());
+      if (micPreviewUrl) URL.revokeObjectURL(micPreviewUrl);
+    };
+  }, [micPreviewUrl]);
 
   return (
     <div className="space-y-8">
@@ -378,6 +429,14 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
               Preserved Audio Assets ({assets.length})
             </h3>
           </div>
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {(['bg_music', 'crackle', 'sound_effect'] as AudioCategory[]).map((category) => (
+              <div key={category} className="flex rounded-lg overflow-hidden border border-stone-700">
+                <button onClick={() => setCategoryEnabled(category, true)} className="px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-950">Enable {category.replace('_', ' ')}</button>
+                <button onClick={() => setCategoryEnabled(category, false)} className="px-2 py-1 text-[10px] text-red-300 hover:bg-red-950">Disable</button>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -410,10 +469,25 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
                         <span className="text-amber-400 font-bold">• Gold Master Exclusive</span>
                       )}
                     </div>
+                    <div className="mt-2 flex items-center gap-3 text-[10px] text-stone-400">
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" checked={asset.is_enabled !== false} onChange={(e) => updateAsset(asset.id, { is_enabled: e.target.checked })} className="accent-emerald-500" />
+                        Available to users
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" checked={asset.is_premium_only} onChange={(e) => updateAsset(asset.id, { is_premium_only: e.target.checked })} className="accent-amber-500" />
+                        Premium
+                      </label>
+                    </div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <label className="hidden sm:flex items-center gap-2 text-[10px] text-stone-400">
+                    Default level
+                    <input type="range" min="0" max="100" step="5" value={Math.round((asset.default_volume ?? (asset.category === 'bg_music' ? 0.18 : 0.25)) * 100)} onChange={(e) => updateAsset(asset.id, { default_volume: Number(e.target.value) / 100 })} className="w-20 accent-amber-500" />
+                    {Math.round((asset.default_volume ?? (asset.category === 'bg_music' ? 0.18 : 0.25)) * 100)}%
+                  </label>
                   <button
                     onClick={() => handleDelete(asset.id)}
                     className="p-2 text-stone-500 hover:text-red-400 transition-colors"

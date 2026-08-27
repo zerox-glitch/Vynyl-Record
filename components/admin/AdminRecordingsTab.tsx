@@ -48,8 +48,12 @@ export const AdminRecordingsTab: React.FC<AdminRecordingsTabProps> = ({
     } else {
       if (audioRef.current) {
         audioRef.current.src = rec.processed_audio_url;
-        audioRef.current.play().catch(() => {});
-        setPlayingId(rec.id);
+        audioRef.current.play()
+          .then(() => setPlayingId(rec.id))
+          .catch(() => {
+            setPlayingId(null);
+            toast.error('This recording audio is unavailable.');
+          });
       }
     }
   };

@@ -15,7 +15,7 @@ export const SoundExperienceBar: React.FC = () => {
       id: 'raw' as const,
       label: '1. Raw Voice Note',
       subtitle: 'Flat digital smartphone mic recording',
-      src: '/audio/demo-raw-sample.mp3',
+      src: '/audio/demo-raw-sample.mp3?v=3',
       icon: <Mic className="w-4 h-4 text-stone-400" />,
       tag: 'Raw Capture',
     },
@@ -23,7 +23,7 @@ export const SoundExperienceBar: React.FC = () => {
       id: 'gramophone' as const,
       label: '2. 1920s Gramophone',
       subtitle: 'Horn bandpass filter + 33.3 RPM wax crackle',
-      src: '/audio/demo-gramophone-sample.mp3',
+      src: '/audio/demo-gramophone-sample.mp3?v=3',
       icon: <Sparkles className="w-4 h-4 text-amber-400" />,
       tag: 'Analog Wax Master',
     },
@@ -31,7 +31,7 @@ export const SoundExperienceBar: React.FC = () => {
       id: 'lofi' as const,
       label: '3. Lo-Fi Rain Saturation',
       subtitle: 'Warm hearth rain + tape saturation + tube compression',
-      src: '/audio/demo-lofi-sample.mp3',
+      src: '/audio/demo-lofi-sample.mp3?v=3',
       icon: <CloudRain className="w-4 h-4 text-sky-400" />,
       tag: 'Atmospheric Master',
     },
@@ -46,7 +46,7 @@ export const SoundExperienceBar: React.FC = () => {
       audioRef.current.src = target.src;
       audioRef.current.currentTime = currentPos;
       if (wasPlaying || isPlaying) {
-        audioRef.current.play().catch(() => {});
+        audioRef.current.play().catch(() => setIsPlaying(false));
       }
     }
   };
@@ -60,8 +60,9 @@ export const SoundExperienceBar: React.FC = () => {
       const target = modes.find((m) => m.id === activeMode);
       if (target) {
         audioRef.current.src = target.src;
-        audioRef.current.play().catch(() => {});
-        setIsPlaying(true);
+        audioRef.current.play()
+          .then(() => setIsPlaying(true))
+          .catch(() => setIsPlaying(false));
       }
     }
   };
@@ -172,6 +173,7 @@ export const SoundExperienceBar: React.FC = () => {
         ref={audioRef}
         src={modes[1].src}
         onEnded={() => setIsPlaying(false)}
+        onError={() => setIsPlaying(false)}
         className="hidden"
       />
     </div>

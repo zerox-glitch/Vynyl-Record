@@ -32,7 +32,7 @@ export const PricingSection: React.FC<PricingSectionProps> = ({ plans }) => {
       if (data.url) {
         if (data.sessionId?.startsWith('demo_session_')) {
           toast.success('✨ Plan unlocked in demo preview mode!');
-          window.location.href = `/studio?upgraded=true&plan=${plan.id}`;
+          window.location.href = data.url;
         } else {
           window.location.href = data.url;
         }

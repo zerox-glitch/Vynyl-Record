@@ -167,32 +167,32 @@ export async function getSiteSettings(): Promise<SiteSettings> {
 
 export async function updateSiteSettings(updates: Partial<SiteSettings>): Promise<SiteSettings> {
   if (isSupabaseServerConfigured()) {
-    try {
-      const supabase = getServiceSupabase();
-      if (updates.hero_copy) {
-        await supabase.from('site_settings').upsert({
+    const supabase = getServiceSupabase();
+    if (updates.hero_copy) {
+      const { error } = await supabase.from('site_settings').upsert({
           key: 'hero_copy',
           value: updates.hero_copy,
           updated_at: new Date().toISOString(),
-        });
-      }
-      if (updates.branding_theme) {
-        await supabase.from('site_settings').upsert({
+      });
+      if (error) throw new Error(`Hero settings could not be saved: ${error.message}`);
+    }
+    if (updates.branding_theme) {
+      const { error } = await supabase.from('site_settings').upsert({
           key: 'branding_theme',
           value: updates.branding_theme,
           updated_at: new Date().toISOString(),
-        });
-      }
-      if (updates.faqs) {
-        await supabase.from('site_settings').upsert({
+      });
+      if (error) throw new Error(`Brand settings could not be saved: ${error.message}`);
+    }
+    if (updates.faqs) {
+      const { error } = await supabase.from('site_settings').upsert({
           key: 'faqs',
           value: updates.faqs,
           updated_at: new Date().toISOString(),
-        });
-      }
-    } catch (err) {
-      console.warn('Supabase site_settings update error:', err);
+      });
+      if (error) throw new Error(`FAQ settings could not be saved: ${error.message}`);
     }
+    return getSiteSettings();
   }
 
   const store = readLocalStore();
@@ -225,18 +225,26 @@ export async function getPricingPlans(): Promise<PricingPlan[]> {
 }
 
 export async function getAllPricingPlans(): Promise<PricingPlan[]> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data, error } = await supabase.from('pricing_plans').select('*').order('price_cents', { ascending: true });
+      if (error) throw error;
+      if (data) return data as PricingPlan[];
+    } catch (err) {
+      console.warn('Supabase all pricing_plans fallback:', err);
+    }
+  }
   const store = readLocalStore();
   return store.pricingPlans;
 }
 
 export async function upsertPricingPlan(plan: PricingPlan): Promise<PricingPlan> {
   if (isSupabaseServerConfigured()) {
-    try {
-      const supabase = getServiceSupabase();
-      await supabase.from('pricing_plans').upsert(plan);
-    } catch (err) {
-      console.warn('Supabase upsert pricing error:', err);
-    }
+    const supabase = getServiceSupabase();
+    const { data, error } = await supabase.from('pricing_plans').upsert(plan).select().single();
+    if (error) throw new Error(`Pricing plan could not be saved: ${error.message}`);
+    return data as PricingPlan;
   }
 
   const store = readLocalStore();
@@ -266,14 +274,28 @@ export async function getAudioAssets(): Promise<AudioAsset[]> {
   return store.audioAssets;
 }
 
+export async function updateAudioAsset(id: string, updates: Partial<AudioAsset>): Promise<AudioAsset | null> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    const { data, error } = await supabase.from('audio_assets').update(updates).eq('id', id).select().single();
+    if (error) throw new Error(`Audio asset could not be updated: ${error.message}`);
+    return data as AudioAsset;
+  }
+
+  const store = readLocalStore();
+  const index = store.audioAssets.findIndex((asset) => asset.id === id);
+  if (index < 0) return null;
+  store.audioAssets[index] = { ...store.audioAssets[index], ...updates };
+  writeLocalStore(store);
+  return store.audioAssets[index];
+}
+
 export async function addAudioAsset(asset: AudioAsset): Promise<AudioAsset> {
   if (isSupabaseServerConfigured()) {
-    try {
-      const supabase = getServiceSupabase();
-      await supabase.from('audio_assets').insert(asset);
-    } catch (err) {
-      console.warn('Supabase add audio_asset error:', err);
-    }
+    const supabase = getServiceSupabase();
+    const { data, error } = await supabase.from('audio_assets').insert(asset).select().single();
+    if (error) throw new Error(`Audio asset could not be created: ${error.message}`);
+    return data as AudioAsset;
   }
 
   const store = readLocalStore();
@@ -284,12 +306,10 @@ export async function addAudioAsset(asset: AudioAsset): Promise<AudioAsset> {
 
 export async function deleteAudioAsset(id: string): Promise<boolean> {
   if (isSupabaseServerConfigured()) {
-    try {
-      const supabase = getServiceSupabase();
-      await supabase.from('audio_assets').delete().eq('id', id);
-    } catch (err) {
-      console.warn('Supabase delete audio_asset error:', err);
-    }
+    const supabase = getServiceSupabase();
+    const { error } = await supabase.from('audio_assets').delete().eq('id', id);
+    if (error) throw new Error(`Audio asset could not be deleted: ${error.message}`);
+    return true;
   }
 
   const store = readLocalStore();
@@ -332,12 +352,9 @@ export async function getRecordingBySlug(slug: string): Promise<Recording | null
 
 export async function saveRecording(recording: Recording): Promise<Recording> {
   if (isSupabaseServerConfigured()) {
-    try {
-      const supabase = getServiceSupabase();
-      await supabase.from('recordings').insert(recording);
-    } catch (err) {
-      console.warn('Supabase save recording error:', err);
-    }
+    const supabase = getServiceSupabase();
+    const { error } = await supabase.from('recordings').insert(recording);
+    if (error) throw new Error(`Recording could not be saved: ${error.message}`);
   }
 
   const store = readLocalStore();
@@ -352,6 +369,20 @@ export async function saveRecording(recording: Recording): Promise<Recording> {
 }
 
 export async function incrementRecordingViews(slug: string): Promise<number> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data: current, error: readError } = await supabase.from('recordings').select('views').eq('slug', slug).single();
+      if (readError) throw readError;
+      const views = (current?.views || 0) + 1;
+      const { error: updateError } = await supabase.from('recordings').update({ views }).eq('slug', slug);
+      if (updateError) throw updateError;
+      return views;
+    } catch (err) {
+      console.warn('Supabase increment views fallback:', err);
+    }
+  }
+
   const store = readLocalStore();
   const rec = store.recordings.find((r) => r.slug.toLowerCase() === slug.toLowerCase());
   if (rec) {
@@ -366,9 +397,26 @@ export async function deleteRecording(id: string): Promise<boolean> {
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
-      await supabase.from('recordings').delete().eq('id', id);
+      const { data: recording, error: readError } = await supabase
+        .from('recordings')
+        .select('processed_audio_url')
+        .eq('id', id)
+        .single();
+      if (readError) throw readError;
+      const audioUrl = recording?.processed_audio_url || '';
+      if (audioUrl.includes('/storage/v1/object/public/recordings/')) {
+        const objectName = decodeURIComponent(audioUrl.split('/').pop() || '');
+        if (objectName) {
+          const { error: storageError } = await supabase.storage.from('recordings').remove([objectName]);
+          if (storageError) throw storageError;
+        }
+      }
+      const { error } = await supabase.from('recordings').delete().eq('id', id);
+      if (error) throw error;
+      return true;
     } catch (err) {
       console.warn('Supabase delete recording error:', err);
+      return false;
     }
   }
 
@@ -380,15 +428,36 @@ export async function deleteRecording(id: string): Promise<boolean> {
 
 // 5. PROFILES & USERS
 export async function getProfiles(): Promise<Profile[]> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+      if (data) return data as Profile[];
+    } catch (err) {
+      console.warn('Supabase profiles fallback:', err);
+    }
+  }
   const store = readLocalStore();
   return store.profiles;
 }
 
 export async function updateProfile(id: string, updates: Partial<Profile>): Promise<Profile | null> {
+  const safeUpdates = { ...updates, updated_at: new Date().toISOString() };
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data, error } = await supabase.from('profiles').update(safeUpdates).eq('id', id).select().single();
+      if (error) throw error;
+      if (data) return data as Profile;
+    } catch (err) {
+      console.warn('Supabase update profile fallback:', err);
+    }
+  }
   const store = readLocalStore();
   const idx = store.profiles.findIndex((p) => p.id === id);
   if (idx >= 0) {
-    store.profiles[idx] = { ...store.profiles[idx], ...updates, updated_at: new Date().toISOString() };
+    store.profiles[idx] = { ...store.profiles[idx], ...safeUpdates };
     writeLocalStore(store);
     return store.profiles[idx];
   }
@@ -396,6 +465,19 @@ export async function updateProfile(id: string, updates: Partial<Profile>): Prom
 }
 
 export async function deleteProfile(id: string): Promise<boolean> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { error: authError } = await supabase.auth.admin.deleteUser(id);
+      if (authError) throw authError;
+      const { error } = await supabase.from('profiles').delete().eq('id', id);
+      if (error) throw error;
+      return true;
+    } catch (err) {
+      console.warn('Supabase delete profile error:', err);
+      return false;
+    }
+  }
   const store = readLocalStore();
   store.profiles = store.profiles.filter((p) => p.id !== id);
   writeLocalStore(store);

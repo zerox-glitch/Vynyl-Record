@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSiteSettings, updateSiteSettings } from '@/lib/db';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export async function GET() {
   try {
@@ -11,6 +12,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const unauthorized = await requireAdmin(req);
+  if (unauthorized) return unauthorized;
   try {
     const body = await req.json();
     const updated = await updateSiteSettings(body);
