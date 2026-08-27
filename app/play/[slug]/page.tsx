@@ -68,6 +68,23 @@ export default function PlayRecordingPage() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const needleDropAudioRef = useRef<HTMLAudioElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const needleDropTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isNeedleDropping, setIsNeedleDropping] = useState<boolean>(false);
+
+  const NEEDLE_DROP_DELAY_MS = 1150; // dramatic vinyl delay: needle drop SFX + brief silence before voice
+
+  const clearNeedleDropTimeout = () => {
+    if (needleDropTimeoutRef.current) {
+      clearTimeout(needleDropTimeoutRef.current);
+      needleDropTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearNeedleDropTimeout();
+    };
+  }, []);
 
   // Fetch recording by slug
   useEffect(() => {
@@ -97,19 +114,76 @@ export default function PlayRecordingPage() {
       });
   }, [slug]);
 
-  // Audio Playback Handlers
+  // Audio Playback Handlers — needle drop every time + dramatic delay
+  const triggerNeedleDropThenPlayMain = (fromTime: number = 0) => {
+    if (!audioRef.current) return;
+
+    clearNeedleDropTimeout();
+
+    // Reset main audio to requested start (usually 0)
+    audioRef.current.currentTime = fromTime;
+    setCurrentTime(fromTime);
+    audioRef.current.volume = isMuted ? 0 : volume;
+
+    // Always reset and play needle drop SFX
+    if (needleDropAudioRef.current) {
+      try {
+        needleDropAudioRef.current.pause();
+      } catch {}
+      needleDropAudioRef.current.currentTime = 0;
+      needleDropAudioRef.current.volume = isMuted ? 0 : Math.min(1, volume + 0.05);
+      // Ensure it loads
+      needleDropAudioRef.current.play().catch(() => {
+        // Even if needle drop fails, continue to main after delay
+      });
+    }
+
+    setIsNeedleDropping(true);
+    setIsPlaying(true); // keeps turntable spinning + tonearm in playing position for dramatic effect
+
+    needleDropTimeoutRef.current = setTimeout(() => {
+      setIsNeedleDropping(false);
+      if (audioRef.current) {
+        audioRef.current.currentTime = fromTime;
+        audioRef.current.volume = isMuted ? 0 : volume;
+        audioRef.current.play().catch((err) => {
+          console.warn('Main audio play error after needle drop:', err);
+          setIsPlaying(false);
+        });
+      }
+    }, NEEDLE_DROP_DELAY_MS);
+  };
+
   const togglePlay = () => {
     if (!audioRef.current) return;
 
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      // Play needle drop sound effect on start if at beginning
-      if (currentTime < 0.5 && needleDropAudioRef.current) {
-        needleDropAudioRef.current.currentTime = 0;
-        needleDropAudioRef.current.play().catch(() => {});
+    // If currently playing or in needle-drop delay phase, pause everything
+    if (isPlaying || isNeedleDropping) {
+      clearNeedleDropTimeout();
+      try {
+        audioRef.current.pause();
+      } catch {}
+      if (needleDropAudioRef.current) {
+        try {
+          needleDropAudioRef.current.pause();
+          needleDropAudioRef.current.currentTime = 0;
+        } catch {}
       }
+      setIsPlaying(false);
+      setIsNeedleDropping(false);
+      return;
+    }
+
+    // Determine if we are at the beginning / end — should always do needle drop in those cases
+    const audioCurrent = audioRef.current.currentTime;
+    const atBeginning = audioCurrent < 0.7 || currentTime < 0.7;
+    const atEnd = duration > 0 && audioCurrent >= duration - 0.35;
+
+    if (atBeginning || atEnd) {
+      triggerNeedleDropThenPlayMain(0);
+    } else {
+      // Resume mid-track without needle drop
+      audioRef.current.volume = isMuted ? 0 : volume;
       audioRef.current.play().catch((err) => {
         console.warn('Audio play error:', err);
       });
@@ -131,21 +205,58 @@ export default function PlayRecordingPage() {
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const target = parseFloat(e.target.value);
-    if (audioRef.current) {
-      audioRef.current.currentTime = target;
-      setCurrentTime(target);
+    if (!audioRef.current) return;
+
+    // If seeking to the very start while playing, re-trigger needle drop for authentic feel
+    if (target < 0.5 && (isPlaying || isNeedleDropping)) {
+      triggerNeedleDropThenPlayMain(0);
+      return;
     }
+
+    // If seeking to start while paused, just move head — next play will do needle drop
+    clearNeedleDropTimeout();
+    if (isNeedleDropping) {
+      setIsNeedleDropping(false);
+      if (needleDropAudioRef.current) {
+        try {
+          needleDropAudioRef.current.pause();
+          needleDropAudioRef.current.currentTime = 0;
+        } catch {}
+      }
+    }
+    audioRef.current.currentTime = target;
+    setCurrentTime(target);
   };
 
   const handleWordJump = (startTime: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = startTime;
-      setCurrentTime(startTime);
-      if (!isPlaying) {
-        audioRef.current.play();
-        setIsPlaying(true);
-      }
+    if (!audioRef.current) return;
+
+    // If jumping to beginning, do full vinyl ritual with needle drop + delay
+    if (startTime < 0.6) {
+      triggerNeedleDropThenPlayMain(startTime);
+      return;
     }
+
+    // Mid-track jump — no needle drop, keep same mastered audio
+    clearNeedleDropTimeout();
+    setIsNeedleDropping(false);
+    if (needleDropAudioRef.current) {
+      try {
+        needleDropAudioRef.current.pause();
+        needleDropAudioRef.current.currentTime = 0;
+      } catch {}
+    }
+    audioRef.current.currentTime = startTime;
+    setCurrentTime(startTime);
+    audioRef.current.volume = isMuted ? 0 : volume;
+    audioRef.current.play().catch(() => {});
+    setIsPlaying(true);
+  };
+
+  const handleRestart = () => {
+    if (!audioRef.current) return;
+    // Restart always does needle drop + delay + play from 0 for authentic vinyl ritual
+    triggerNeedleDropThenPlayMain(0);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,18 +265,21 @@ export default function PlayRecordingPage() {
     if (audioRef.current) {
       audioRef.current.volume = val;
     }
+    if (needleDropAudioRef.current) {
+      needleDropAudioRef.current.volume = Math.min(1, val + 0.05);
+    }
     if (val > 0) setIsMuted(false);
   };
 
   const toggleMute = () => {
-    if (audioRef.current) {
-      if (isMuted) {
-        audioRef.current.volume = volume;
-        setIsMuted(false);
-      } else {
-        audioRef.current.volume = 0;
-        setIsMuted(true);
-      }
+    if (isMuted) {
+      if (audioRef.current) audioRef.current.volume = volume;
+      if (needleDropAudioRef.current) needleDropAudioRef.current.volume = Math.min(1, volume + 0.05);
+      setIsMuted(false);
+    } else {
+      if (audioRef.current) audioRef.current.volume = 0;
+      if (needleDropAudioRef.current) needleDropAudioRef.current.volume = 0;
+      setIsMuted(true);
     }
   };
 
@@ -284,9 +398,14 @@ export default function PlayRecordingPage() {
                 <span className="px-2.5 py-0.5 rounded-full bg-stone-800 border border-stone-700 text-stone-300 font-mono">
                   {filterConfig.name}
                 </span>
+                {isNeedleDropping && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-600 text-stone-950 font-bold font-mono animate-pulse border border-amber-300">
+                    ● Needle Dropping...
+                  </span>
+                )}
               </div>
               <span className="font-mono text-stone-400 text-[11px]">
-                33⅓ RPM • Analog Master
+                33⅓ RPM • Analog Master {isNeedleDropping ? '• Lowering Tonearm' : ''}
               </span>
             </div>
 
@@ -333,13 +452,21 @@ export default function PlayRecordingPage() {
               {/* Action Buttons */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {/* Master Play Button */}
+                  {/* Master Play Button — shows needle drop phase */}
                   <button
                     onClick={togglePlay}
                     className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-700 text-stone-950 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xl shadow-amber-950/60 border border-amber-300/40"
-                    title={isPlaying ? 'Pause Turntable' : 'Play Vinyl Note'}
+                    title={
+                      isNeedleDropping
+                        ? 'Needle Dropping — Click to Cancel'
+                        : isPlaying
+                        ? 'Pause Turntable'
+                        : 'Play Vinyl Note with Needle Drop'
+                    }
                   >
-                    {isPlaying ? (
+                    {isNeedleDropping ? (
+                      <Disc3 className="w-6 h-6 text-stone-950 animate-spin" />
+                    ) : isPlaying ? (
                       <Pause className="w-6 h-6 fill-stone-950 stroke-[2.5]" />
                     ) : (
                       <Play className="w-6 h-6 fill-stone-950 stroke-[2.5] ml-1" />
@@ -347,17 +474,18 @@ export default function PlayRecordingPage() {
                   </button>
 
                   <button
-                    onClick={() => {
-                      if (audioRef.current) {
-                        audioRef.current.currentTime = 0;
-                        setCurrentTime(0);
-                      }
-                    }}
+                    onClick={handleRestart}
                     className="p-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-amber-300 transition-colors border border-stone-700"
-                    title="Restart Track"
+                    title="Restart with Needle Drop"
                   >
                     <RotateCcw className="w-4 h-4" />
                   </button>
+
+                  {isNeedleDropping && (
+                    <span className="text-[11px] font-mono text-amber-300 animate-pulse ml-1">
+                      Lowering brass needle → {NEEDLE_DROP_DELAY_MS}ms to voice...
+                    </span>
+                  )}
                 </div>
 
                 {/* Volume & Mute Controls */}
@@ -401,18 +529,24 @@ export default function PlayRecordingPage() {
         </div>
       </main>
 
-      {/* Hidden Audio Players */}
+      {/* Hidden Audio Players — main stays identical every playback (crackle+bg baked), needle drop is separate SFX with delay */}
       <audio
         ref={audioRef}
         src={recording.processed_audio_url}
+        preload="auto"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
-        onEnded={() => setIsPlaying(false)}
+        onEnded={() => {
+          clearNeedleDropTimeout();
+          setIsPlaying(false);
+          setIsNeedleDropping(false);
+        }}
         className="hidden"
       />
       <audio
         ref={needleDropAudioRef}
         src="/audio/needle-drop.mp3"
+        preload="auto"
         className="hidden"
       />
 
