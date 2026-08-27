@@ -68,6 +68,7 @@ export default function PlayRecordingPage() {
   const [shareModalOpen, setShareModalOpen] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isListeningFullscreen, setIsListeningFullscreen] = useState<boolean>(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const needleDropAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -87,6 +88,21 @@ export default function PlayRecordingPage() {
   useEffect(() => {
     return () => clearNeedleDropTimeout();
   }, []);
+
+  // Auto fullscreen when listening starts - cozy immersive experience
+  useEffect(() => {
+    if (isPlaying || isNeedleDropping) {
+      setIsListeningFullscreen(true);
+    }
+  }, [isPlaying, isNeedleDropping]);
+
+  // Exit listening fullscreen when paused and at beginning
+  useEffect(() => {
+    if (!isPlaying && !isNeedleDropping && currentTime < 0.5) {
+      // Keep fullscreen for a moment then allow exit, but don't auto-exit immediately
+      // User can manually exit with button
+    }
+  }, [isPlaying, isNeedleDropping, currentTime]);
 
   useEffect(() => {
     if (!slug) return;
@@ -474,6 +490,92 @@ export default function PlayRecordingPage() {
           </div>
         </div>
       </main>
+
+      {/* Fullscreen Immersive Listening Room - appears when playing */}
+      {isListeningFullscreen && (
+        <div className="fixed inset-0 z-[100] bg-[#0c0a09] flex flex-col animate-in fade-in duration-500">
+          {/* Top bar */}
+          <div className="absolute top-0 left-0 right-0 z-20 p-4 flex items-center justify-between bg-gradient-to-b from-stone-950/90 to-transparent">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-600 flex items-center justify-center shadow-xl">
+                <Music className="w-5 h-5 text-stone-950" />
+              </div>
+              <div>
+                <p className="text-sm font-serif font-bold text-amber-100">{recording.title}</p>
+                <p className="text-xs font-mono text-stone-400">
+                  {isNeedleDropping ? '● Needle Dropping • Brass horn lowering...' : isPlaying ? '● Live in Cozy Room • Gramophone Playing' : 'Paused'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-flex px-3 py-1 rounded-full bg-stone-900/80 border border-amber-500/30 text-amber-300 font-mono text-xs">
+                Fullscreen Listening Room • Fireplace + Brass Horn
+              </span>
+              <Button variant="outline" size="sm" onClick={() => setIsListeningFullscreen(false)} leftIcon={<Minimize2 className="w-4 h-4" />}>
+                Exit Fullscreen
+              </Button>
+            </div>
+          </div>
+
+          {/* Fullscreen Room */}
+          <div className="flex-1 w-full h-full relative">
+            <CozyGramophoneRoom
+              isPlaying={isPlaying}
+              isNeedleDropping={isNeedleDropping}
+              vinylStyle={recording.vinyl_style}
+              title={recording.title}
+              recipientName={recording.recipient_name || undefined}
+              senderName={recording.sender_name || undefined}
+            />
+
+            {/* Bottom controls */}
+            <div className="absolute bottom-0 left-0 right-0 z-20 p-6 bg-gradient-to-t from-stone-950 via-stone-950/80 to-transparent">
+              <div className="max-w-5xl mx-auto space-y-4">
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 10}
+                    step={0.1}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="w-full h-2 bg-stone-800/80 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                  />
+                  <div className="flex justify-between text-xs font-mono text-stone-400">
+                    <span className="text-amber-300 font-bold text-sm">{formatTime(currentTime)}</span>
+                    <span className="text-sm">{formatTime(duration || recording.duration_seconds || 10)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={togglePlay}
+                      className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-700 text-stone-950 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-2xl shadow-amber-950/70 border border-amber-300/50"
+                    >
+                      {isNeedleDropping ? <Disc3 className="w-7 h-7 animate-spin" /> : isPlaying ? <Pause className="w-7 h-7 fill-stone-950" /> : <Play className="w-7 h-7 fill-stone-950 ml-1" />}
+                    </button>
+                    <button onClick={handleRestart} className="p-3.5 rounded-xl bg-stone-900/80 hover:bg-stone-800 text-stone-300 border border-stone-700">
+                      <RotateCcw className="w-5 h-5" />
+                    </button>
+                    <div className="hidden sm:block">
+                      <p className="text-sm font-serif font-bold text-amber-100">
+                        {isNeedleDropping ? 'Lowering brass needle onto wax...' : isPlaying ? 'Gramophone playing in cozy room' : 'Paused in listening room'}
+                      </p>
+                      <p className="text-xs font-mono text-stone-400">{styleConfig.name} • {filterConfig.name} • BG + crackle baked in</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 bg-stone-900/70 backdrop-blur-md px-4 py-2.5 rounded-xl border border-stone-700">
+                    <button onClick={toggleMute} className="text-stone-400 hover:text-amber-300">
+                      {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                    </button>
+                    <input type="range" min={0} max={1} step={0.05} value={isMuted ? 0 : volume} onChange={handleVolumeChange} className="w-28 h-1.5 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-amber-500" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Hidden Audio - main is identical every time (BG + crackle baked), needle drop separate */}
       <audio

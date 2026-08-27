@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, Suspense } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Navbar } from '@/components/ui/Navbar';
 import { Footer } from '@/components/ui/Footer';
@@ -22,9 +23,22 @@ import {
   DEFAULT_AUDIO_ASSETS, 
   DEFAULT_PRICING_PLANS 
 } from '@/lib/constants';
-import { Disc3, Send, Crown, User, Heart, Mic2 } from 'lucide-react';
+import { Disc3, Send, Crown, User, Heart, Mic2, Maximize2, Minimize2, Flame, Sofa, Music } from 'lucide-react';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
+
+const CozyGramophoneRoom = dynamic(
+  () => import('@/components/3d/CozyGramophoneRoom'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-full min-h-[400px] flex flex-col items-center justify-center bg-stone-950 rounded-2xl border border-amber-900/20">
+        <Disc3 className="w-8 h-8 text-amber-500 animate-spin" />
+        <span className="text-xs font-mono text-amber-300 mt-3">Loading Cozy Room...</span>
+      </div>
+    ),
+  }
+);
 
 function StudioContent() {
   const router = useRouter();
@@ -33,6 +47,8 @@ function StudioContent() {
   // Recorded Audio State
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [recordedDuration, setRecordedDuration] = useState<number>(0);
+  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'paused' | 'stopped'>('idle');
+  const [isRoomFullscreen, setIsRoomFullscreen] = useState<boolean>(false);
 
   // Metadata
   const [title, setTitle] = useState<string>('My Heartfelt Voice Note');
@@ -42,7 +58,7 @@ function StudioContent() {
   // Audio & Vinyl Settings
   const [filterPreset, setFilterPreset] = useState<FilterPresetType>('gramophone');
   const [selectedBgMusicId, setSelectedBgMusicId] = useState<string | null>('a2222222-2222-2222-2222-222222222222');
-  const [crackleIntensity, setCrackleIntensity] = useState<number>(0.15);
+  const [crackleIntensity, setCrackleIntensity] = useState<number>(0.22);
   const [vinylStyle, setVinylStyle] = useState<VinylStyleType>('classic_red');
 
   // Dynamic Data & Plans
@@ -55,6 +71,13 @@ function StudioContent() {
   const [latheStepIndex, setLatheStepIndex] = useState<number>(0);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Auto fullscreen when recording starts
+  useEffect(() => {
+    if (recordingState === 'recording') {
+      setIsRoomFullscreen(true);
+    }
+  }, [recordingState]);
 
   // Check if user upgraded via URL param
   useEffect(() => {
@@ -89,11 +112,17 @@ function StudioContent() {
   const handleAudioReady = (blob: Blob, durationSec: number) => {
     setAudioBlob(blob);
     setRecordedDuration(durationSec);
+    setRecordingState('stopped');
   };
 
   const handleClearAudio = () => {
     setAudioBlob(null);
     setRecordedDuration(0);
+    setRecordingState('idle');
+  };
+
+  const handleRecordingStateChange = (state: 'idle' | 'recording' | 'paused' | 'stopped') => {
+    setRecordingState(state);
   };
 
   // Submit to Server-Side Audio Engine
@@ -165,38 +194,120 @@ function StudioContent() {
   const isOverDurationLimit = !isPremium && recordedDuration > maxDuration;
 
   return (
-    <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-10">
+    <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Fullscreen Recording Room */}
+      {isRoomFullscreen && (
+        <div className="fixed inset-0 z-[100] bg-[#0c0a09] flex flex-col">
+          <div className="absolute top-0 left-0 right-0 z-20 p-4 flex items-center justify-between bg-gradient-to-b from-stone-950/90 to-transparent">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${recordingState === 'recording' ? 'bg-red-600 animate-pulse' : 'bg-amber-600'}`}>
+                <Mic2 className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-serif font-bold text-amber-100">
+                  {recordingState === 'recording' ? '● Recording in Cozy Room' : recordingState === 'paused' ? 'Paused • Cozy Room' : 'Cozy Recording Studio'}
+                </p>
+                <p className="text-xs font-mono text-stone-400">
+                  {recordingState === 'recording' ? 'Fireplace crackling • Brass horn ready • Speak your memory' : 'Ready to capture'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-flex px-3 py-1 rounded-full bg-stone-900/80 border border-amber-500/30 text-amber-300 font-mono text-xs">
+                <Flame className="w-3 h-3 mr-1" /> Fireplace Lit • Fullscreen
+              </span>
+              <Button variant="outline" size="sm" onClick={() => setIsRoomFullscreen(false)} leftIcon={<Minimize2 className="w-4 h-4" />}>
+                Exit Fullscreen
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex-1 relative">
+            <CozyGramophoneRoom
+              isPlaying={false}
+              isNeedleDropping={false}
+              isRecording={recordingState === 'recording'}
+              vinylStyle={vinylStyle}
+              title={title}
+              recipientName={recipientName || 'Loved One'}
+              senderName={senderName || 'With Love'}
+            />
+            <div className="absolute bottom-0 left-0 right-0 z-20 p-6 bg-gradient-to-t from-stone-950 via-stone-950/80 to-transparent">
+              <div className="max-w-4xl mx-auto">
+                <AudioRecorder
+                  onAudioReady={handleAudioReady}
+                  onClearAudio={handleClearAudio}
+                  maxDurationSeconds={maxDuration}
+                  isPremium={isPremium}
+                  onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
+                  onRecordingStateChange={handleRecordingStateChange}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Studio Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-stone-800 pb-8">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-amber-500 font-mono text-xs uppercase tracking-widest">
-            <Mic2 className="w-4 h-4" />
-            <span>Analog Mastering Workshop</span>
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-amber-900/30 pb-8">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/60 border border-amber-600/30 text-amber-300 text-xs font-mono">
+              <Flame className="w-3.5 h-3.5 text-orange-400" />
+              <span>Cozy Vintage Studio • Fireplace Lit</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-stone-700 text-stone-300 text-xs font-mono">
+              <Sofa className="w-3.5 h-3.5 text-amber-400" />
+              <span>Fullscreen when Recording</span>
+            </span>
           </div>
           <h1 className="text-3xl sm:text-4xl font-serif font-bold text-stone-100 tracking-tight">
             The Sender Studio
           </h1>
-          <p className="text-sm text-stone-400 max-w-xl">
-            Speak straight from your heart. Our server-side acoustic engine layers authentic 1920s gramophone resonance, vintage vinyl static, and AI word-by-word synchronized transcripts.
+          <p className="text-sm text-stone-400 max-w-2xl leading-relaxed">
+            Speak in a warm 1920s study — fireplace crackling, brass gramophone horn glowing. Our server now <span className="text-amber-300 font-bold">guarantees BG music + crackle baked into MP3</span> (32% BG, 8-40% crackle), same every playback. Fullscreen immersive room when you hit record.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          <Button variant="outline" size="sm" onClick={() => setIsRoomFullscreen(true)} leftIcon={<Maximize2 className="w-4 h-4" />}>
+            Enter Cozy Room
+          </Button>
           {isPremium ? (
             <div className="flex items-center gap-2 bg-gradient-to-r from-amber-600/20 to-amber-800/30 border border-amber-500/50 px-4 py-2 rounded-xl text-amber-300 text-xs font-mono">
               <Crown className="w-4 h-4 text-amber-400" />
-              <span>Gold Master Member (10 Min / All Styles)</span>
+              <span>Gold Master (10 Min)</span>
             </div>
           ) : (
-            <Button
-              variant="outline"
-              size="md"
-              onClick={() => setIsUpgradeModalOpen(true)}
-              leftIcon={<Crown className="w-4 h-4 text-amber-400" />}
-            >
-              Upgrade Plan (Up to 10 Min)
+            <Button variant="outline" size="md" onClick={() => setIsUpgradeModalOpen(true)} leftIcon={<Crown className="w-4 h-4 text-amber-400" />}>
+              Upgrade
             </Button>
           )}
+        </div>
+      </div>
+
+      {/* Cozy Room Preview - non fullscreen */}
+      <div className="w-full rounded-3xl overflow-hidden border border-amber-900/30 shadow-2xl relative">
+        <div className="absolute top-0 left-0 right-0 z-10 p-3 flex items-center justify-between pointer-events-none">
+          <span className="px-3 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-amber-500/30 text-amber-300 font-mono text-xs inline-flex items-center gap-1.5">
+            <Music className="w-3 h-3" /> Live Preview • {vinylStyle} • {filterPreset}
+          </span>
+          <span className="px-3 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-stone-800 text-stone-400 font-mono text-[11px]">
+            Drag to explore • Auto fullscreen when recording
+          </span>
+        </div>
+        <div className="h-[420px]">
+          <Suspense fallback={<div className="h-full flex items-center justify-center"><Disc3 className="w-8 h-8 text-amber-500 animate-spin" /></div>}>
+            <CozyGramophoneRoom
+              isPlaying={false}
+              isNeedleDropping={false}
+              isRecording={recordingState === 'recording'}
+              vinylStyle={vinylStyle}
+              title={title}
+              recipientName={recipientName || 'Loved One'}
+              senderName={senderName || 'With Love'}
+            />
+          </Suspense>
         </div>
       </div>
 
@@ -226,6 +337,7 @@ function StudioContent() {
               maxDurationSeconds={maxDuration}
               isPremium={isPremium}
               onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
+              onRecordingStateChange={handleRecordingStateChange}
             />
           </div>
 
