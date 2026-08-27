@@ -4,7 +4,10 @@ import { serveAudioFile } from '@/lib/audio/storage';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Legacy `/records/<file>` URLs kept for older records. */
+/**
+ * Streams a pressed master or its raw take.
+ * GET /api/records/<file> — Range aware, so scrubbing works in every browser.
+ */
 export async function GET(
   req: NextRequest,
   { params }: { params: { filename: string } }
@@ -12,7 +15,7 @@ export async function GET(
   try {
     return serveAudioFile(req, params.filename);
   } catch (error: any) {
-    console.error('[AudioRoute] streaming error:', error);
+    console.error('[RecordsRoute] streaming error:', error);
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 }

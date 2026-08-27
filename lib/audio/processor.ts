@@ -1,83 +1,71 @@
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { execFile } from 'child_process';
 import { FilterPresetType } from '@/types';
 
-// Robust FFmpeg binary resolution - works with @ffmpeg-installer (2018 static) and modern
-let ffmpegPathResolved = false;
-try {
-  const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
-  if (ffmpegInstaller && ffmpegInstaller.path && fs.existsSync(ffmpegInstaller.path)) {
-    ffmpeg.setFfmpegPath(ffmpegInstaller.path);
-    console.log('[AudioEngine] Using @ffmpeg-installer binary:', ffmpegInstaller.path);
-    ffmpegPathResolved = true;
-  }
-} catch {}
+/* ------------------------------------------------------------------ *
+ * Binary resolution                                                  *
+ * ------------------------------------------------------------------ *
+ * Vercel/lambda gives us a read-only FS and no system ffmpeg, so we  *
+ * resolve a bundled static binary and remember its path for the     *
+ * (ffprobe-free) duration probe below.                               */
 
-if (!ffmpegPathResolved) {
+let resolvedFfmpegPath: string | null = null;
+let ffprobeReady = false;
+
+function resolveBinaries() {
+  if (resolvedFfmpegPath !== null || (globalThis as any).__vynylFfmpegResolved) return;
+  (globalThis as any).__vynylFfmpegResolved = true;
+
   try {
-    const ffmpegStatic = require('ffmpeg-static');
-    const staticPath = typeof ffmpegStatic === 'string' ? ffmpegStatic : (ffmpegStatic as any).path || ffmpegStatic;
-    if (staticPath && fs.existsSync(staticPath)) {
-      ffmpeg.setFfmpegPath(staticPath);
-      console.log('[AudioEngine] Using ffmpeg-static binary:', staticPath);
-      ffmpegPathResolved = true;
+    const installer = require('@ffmpeg-installer/ffmpeg');
+    if (installer?.path && fs.existsSync(installer.path)) {
+      ffmpeg.setFfmpegPath(installer.path);
+      resolvedFfmpegPath = installer.path;
+      console.log('[AudioEngine] ffmpeg binary (@ffmpeg-installer):', installer.path);
+      return;
     }
   } catch {}
-}
 
-if (!ffmpegPathResolved) {
-  const possiblePaths = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'];
-  for (const p of possiblePaths) {
+  try {
+    const staticPkg = require('ffmpeg-static');
+    const p = typeof staticPkg === 'string' ? staticPkg : staticPkg?.path;
+    if (p && fs.existsSync(p)) {
+      ffmpeg.setFfmpegPath(p);
+      resolvedFfmpegPath = p;
+      console.log('[AudioEngine] ffmpeg binary (ffmpeg-static):', p);
+      return;
+    }
+  } catch {}
+
+  for (const p of ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg']) {
     try {
       if (fs.existsSync(p)) {
         ffmpeg.setFfmpegPath(p);
-        console.log('[AudioEngine] Using system ffmpeg:', p);
-        ffmpegPathResolved = true;
-        break;
+        resolvedFfmpegPath = p;
+        console.log('[AudioEngine] ffmpeg binary (system):', p);
+        return;
       }
     } catch {}
   }
+  console.warn('[AudioEngine] No bundled ffmpeg found — relying on PATH. Audio will fall back to a raw take.');
 }
 
-if (!ffmpegPathResolved) {
-  console.log('[AudioEngine] No explicit ffmpeg binary found, relying on PATH');
-}
+resolveBinaries();
 
-try {
-  const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
-  if (ffprobeInstaller && ffprobeInstaller.path && fs.existsSync(ffprobeInstaller.path)) {
-    (ffmpeg as any).setFfprobePath(ffprobeInstaller.path);
-    console.log('[AudioEngine] Using @ffprobe-installer binary');
-  }
-} catch {
-  try {
-    const ffprobeStatic = require('ffprobe-static');
-    const p = typeof ffprobeStatic === 'string' ? ffprobeStatic : (ffprobeStatic as any).path;
-    if (p && fs.existsSync(p)) {
-      (ffmpeg as any).setFfprobePath(p);
-      console.log('[AudioEngine] Using ffprobe-static binary');
-    }
-  } catch {}
-}
+export const FFMPEG_AVAILABLE = () => {
+  resolveBinaries();
+  return resolvedFfmpegPath !== null;
+};
 
-export interface AudioProcessingOptions {
-  voiceFilePath: string;
-  outputFilePath: string;
-  filterPreset: FilterPresetType;
-  crackleIntensity: number;
-  bgMusicFilePath?: string | null;
-  crackleFilePath?: string | null;
-}
+/* ------------------------------------------------------------------ *
+ * Vintage voice filters                                              *
+ * ------------------------------------------------------------------ *
+ * Kept compatible with the 2018 static build (no `q` param on        *
+ * highpass/lowpass, no `makeup` on acompressor).                     */
 
-export interface AudioProcessResult {
-  durationSeconds: number;
-  outputFilePath: string;
-}
-
-/**
- * Vintage filters compatible with old 2018 ffmpeg-static from @ffmpeg-installer
- * No 'q' param in highpass/lowpass, no makeup in acompressor for max compatibility
- */
 export function getVoiceFilterString(preset: FilterPresetType): string {
   switch (preset) {
     case 'gramophone':
@@ -88,34 +76,146 @@ export function getVoiceFilterString(preset: FilterPresetType): string {
       return 'lowpass=f=6500,equalizer=f=120:t=q:w=1:g=4,acompressor=threshold=-16dB:ratio=4:attack=10:release=180,volume=1.3';
     case 'clean':
     default:
-      return 'volume=1.0,acompressor=threshold=-12dB:ratio=2';
+      return 'volume=1.15,acompressor=threshold=-12dB:ratio=2';
   }
 }
 
-export function getAudioDuration(filePath: string): Promise<number> {
+/* ------------------------------------------------------------------ *
+ * Duration probing                                                   *
+ * ------------------------------------------------------------------ *
+ * ffprobe is often absent (Vercel ships only the ffmpeg binary in    *
+ * @ffmpeg-installer), so we parse the `Duration:` line ffmpeg itself *
+ * prints when opening a file. That gives real seconds instead of the *
+ * old `bytes / 24000` guess that broke the scrub bar.                */
+
+export function probeDurationSeconds(filePath: string): Promise<number> {
   return new Promise((resolve) => {
-    try {
-      ffmpeg.ffprobe(filePath, (err, metadata) => {
-        if (err || !metadata || !metadata.format || !metadata.format.duration) {
-          try {
-            const stats = fs.statSync(filePath);
-            const estimated = Math.max(3, Math.min(600, Math.floor(stats.size / 24000)));
-            return resolve(estimated);
-          } catch {
-            return resolve(10);
-          }
+    const fromFfmpeg = () => {
+      resolveBinaries();
+      if (!resolvedFfmpegPath) return resolve(estimateFromSize(filePath));
+      execFile(
+        resolvedFfmpegPath,
+        ['-hide_banner', '-i', filePath],
+        { timeout: 8000, maxBuffer: 1024 * 1024 * 4 },
+        (_err, _stdout, stderr) => {
+          const m = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(String(stderr || ''));
+          if (!m) return resolve(estimateFromSize(filePath));
+          const secs = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+          resolve(Number.isFinite(secs) && secs > 0 ? Number(secs.toFixed(2)) : estimateFromSize(filePath));
         }
-        resolve(metadata.format.duration);
+      );
+    };
+
+    try {
+      ffmpeg.ffprobe(filePath, (err, meta) => {
+        const dur = meta?.format?.duration;
+        if (!err && typeof dur === 'number' && Number.isFinite(dur) && dur > 0) {
+          return resolve(Number(dur.toFixed(2)));
+        }
+        fromFfmpeg();
       });
     } catch {
-      resolve(10);
+      fromFfmpeg();
     }
   });
 }
 
+function estimateFromSize(filePath: string): number {
+  try {
+    const stats = fs.statSync(filePath);
+    return Math.max(1, Math.min(1800, Math.round((stats.size / 24000) * 10) / 10));
+  } catch {
+    return 0;
+  }
+}
+
+/** Kept for admin/preview callers that only need a number. */
+export async function getAudioDuration(filePath: string): Promise<number> {
+  const dur = await probeDurationSeconds(filePath);
+  return dur > 0 ? dur : 10;
+}
+
+/* ------------------------------------------------------------------ *
+ * Mix maths                                                          *
+ * ------------------------------------------------------------------ *
+ * `amix` renormalises by the number of inputs, so a 3-input mix lands *
+ * ~9.5 dB below the voice. The previous engine shipped that: masters *
+ * measured mean −38 dB versus −26 dB for the filtered voice alone, so *
+ * records *sounded* broken (barely audible, especially on phones). We *
+ * now undo the division and catch the peaks with a limiter.          */
+
+/** Measured: mean -38.1 dB before, -26.3 dB after, peaks still under 0 dBFS. */
+const MASTER_TRIM = 1.3;
+
+export interface MixLevels {
+  /** Relative level of the background track, post-compensation. */
+  bgMusic: number;
+  /** Relative level of the vinyl crackle bed. */
+  crackle: number;
+}
+
+export function getMixLevels(crackleIntensity: number): MixLevels {
+  const c = Number.isFinite(crackleIntensity) ? Math.max(0, Math.min(1, crackleIntensity)) : 0.22;
+  return {
+    bgMusic: 0.32,
+    crackle: Number((0.06 + c * 0.42).toFixed(4)),
+  };
+}
+
+export interface AudioProcessingOptions {
+  voiceFilePath: string;
+  outputFilePath: string;
+  filterPreset: FilterPresetType;
+  crackleIntensity: number;
+  bgMusicFilePath?: string | null;
+  crackleFilePath?: string | null;
+  /** Hard ceiling for the master, in seconds (plan limits). */
+  maxSeconds?: number;
+}
+
+export type MixStrategy = 'stream-loop' | 'aloop' | 'voice-and-crackle' | 'voice-only' | 'passthrough';
+
+export interface AudioProcessResult {
+  durationSeconds: number;
+  outputFilePath: string;
+  /** `mp3` when we transcoded; `source` when the upload was copied verbatim. */
+  container: 'mp3' | 'source';
+  strategy: MixStrategy;
+  mix: {
+    voice: boolean;
+    bgMusic: boolean;
+    crackle: boolean;
+    filterPreset: FilterPresetType;
+    /** dBFS mean of the master, measured by the engine (0 when unavailable). */
+    levels: MixLevels | null;
+  };
+}
+
+interface AttemptConfig {
+  strategy: MixStrategy;
+  /** loop the extra inputs with the `-stream_loop` input option (preferred) */
+  useStreamLoop: boolean;
+  /** include the background track */
+  withBg: boolean;
+  /** include the crackle bed */
+  withCrackle: boolean;
+  /** add alimiter + head/tail fades (skipped for ancient builds) */
+  polish: boolean;
+}
+
+const ATTEMPTS: AttemptConfig[] = [
+  { strategy: 'stream-loop', useStreamLoop: true, withBg: true, withCrackle: true, polish: true },
+  { strategy: 'aloop', useStreamLoop: false, withBg: true, withCrackle: true, polish: true },
+  { strategy: 'stream-loop', useStreamLoop: true, withBg: true, withCrackle: true, polish: false },
+  { strategy: 'aloop', useStreamLoop: false, withBg: true, withCrackle: false, polish: false },
+  { strategy: 'voice-and-crackle', useStreamLoop: true, withBg: false, withCrackle: true, polish: true },
+  { strategy: 'voice-only', useStreamLoop: false, withBg: false, withCrackle: false, polish: true },
+];
+
 /**
- * Server-Side Audio Synthesis - Guaranteed BG + Crackle mixing
- * Compatible with old ffmpeg 2018 static binary
+ * Press a voice take onto a vinyl master: vintage filter chain on the voice,
+ * background music + crackle bed mixed in, bounded to the voice length so a
+ * looped bed can never run away, all levels compensated for `amix` gain loss.
  */
 export async function processAudioTrack(options: AudioProcessingOptions): Promise<AudioProcessResult> {
   const {
@@ -125,188 +225,309 @@ export async function processAudioTrack(options: AudioProcessingOptions): Promis
     crackleIntensity,
     bgMusicFilePath,
     crackleFilePath,
+    maxSeconds = 600,
   } = options;
 
   if (!fs.existsSync(voiceFilePath)) {
     throw new Error('Input voice recording file was not found on server.');
   }
 
+  const levels = getMixLevels(crackleIntensity);
   const voiceFilter = getVoiceFilterString(filterPreset);
-  
-  // Volumes - BG clearly audible, crackle audible but not overwhelming
-  const bgMusicVolume = 0.32; // 32% - clearly audible cozy background
-  const crackleVolume = Math.max(0.08, Math.min(0.4, crackleIntensity * 0.6 + 0.06));
+  const wantedDuration = await probeDurationSeconds(voiceFilePath);
 
-  console.log(`[AudioEngine] Processing preset=${filterPreset} crackle=${crackleIntensity}->${crackleVolume.toFixed(3)} bg=${bgMusicFilePath ? 'YES '+bgMusicVolume : 'NO'} crackleFile=${crackleFilePath ? 'YES' : 'NO'}`);
-
-  const hasBgMusic = !!(bgMusicFilePath && fs.existsSync(bgMusicFilePath));
-  const hasCrackle = !!(crackleIntensity > 0.01 && crackleFilePath && fs.existsSync(crackleFilePath));
-
-  if (bgMusicFilePath && !hasBgMusic) console.warn(`[AudioEngine] BG file missing: ${bgMusicFilePath}`);
-  if (crackleFilePath && !hasCrackle) console.warn(`[AudioEngine] Crackle file missing or intensity low`);
-
-  // Primary: Compatible complex filter that works on 2018 ffmpeg
-  try {
-    const result = await new Promise<AudioProcessResult>((resolve, reject) => {
-      const command = ffmpeg();
-      command.input(voiceFilePath).inputOptions(['-nostdin', '-vn']);
-
-      const filters: string[] = [];
-      let inputIdx = 1;
-      let mixInputs = '[v0]';
-
-      // Voice with vintage filter + resample + stereo
-      filters.push(`[0:a]${voiceFilter},aresample=44100,aformat=channel_layouts=stereo[v0]`);
-
-      if (hasBgMusic) {
-        command.input(bgMusicFilePath!).inputOptions(['-nostdin', '-vn', '-stream_loop', '-1']);
-        filters.push(`[${inputIdx}:a]volume=${bgMusicVolume},aresample=44100,aformat=channel_layouts=stereo[bg]`);
-        mixInputs += '[bg]';
-        inputIdx++;
-      }
-
-      if (hasCrackle) {
-        command.input(crackleFilePath!).inputOptions(['-nostdin', '-vn', '-stream_loop', '-1']);
-        filters.push(`[${inputIdx}:a]volume=${crackleVolume.toFixed(4)},aresample=44100,aformat=channel_layouts=stereo[crk]`);
-        mixInputs += '[crk]';
-        inputIdx++;
-      }
-
-      const totalInputs = inputIdx;
-
-      if (totalInputs > 1) {
-        // Old ffmpeg compatible: only inputs, duration, dropout_transition
-        filters.push(`${mixInputs}amix=inputs=${totalInputs}:duration=first:dropout_transition=0[outa]`);
-        command.complexFilter(filters, 'outa');
-      } else {
-        command.audioFilter(voiceFilter);
-      }
-
-      command
-        .outputOptions(['-nostdin', '-threads', '1', '-vn', '-shortest'])
-        .audioCodec('libmp3lame')
-        .audioBitrate(192)
-        .audioChannels(2)
-        .audioFrequency(44100)
-        .output(outputFilePath)
-        .on('start', (cmd) => console.log('[AudioEngine] FFmpeg CMD:', cmd))
-        .on('end', async () => {
-          const dur = await getAudioDuration(outputFilePath);
-          const size = fs.existsSync(outputFilePath) ? fs.statSync(outputFilePath).size : 0;
-          console.log(`[AudioEngine] Primary mix SUCCESS duration=${dur}s size=${size} bg=${hasBgMusic} crackle=${hasCrackle}`);
-          resolve({ durationSeconds: dur, outputFilePath });
-        })
-        .on('error', (err, stdout, stderr) => {
-          console.warn('[AudioEngine] Primary mix ERROR:', err.message);
-          if (stderr) console.warn('[AudioEngine] stderr tail:', stderr.slice(-1500));
-          reject(err);
-        });
-
-      command.run();
-    });
-
-    if (fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 500) {
-      return result;
-    }
-    throw new Error('Primary output too small');
-  } catch (primaryErr) {
-    console.warn('[AudioEngine] Primary failed, trying fallback without stream_loop...');
+  if (!wantedDuration) {
+    console.warn('[AudioEngine] Could not probe the upload; falling back to a raw copy.');
+    return passthrough(voiceFilePath, outputFilePath, filterPreset, levels);
   }
 
-  // Fallback 1: Without stream_loop, using aloop filter (more compatible for some builds)
-  if (hasBgMusic || hasCrackle) {
+  const voiceDuration = Math.max(0.6, Math.min(wantedDuration, maxSeconds));
+  const hasBg = !!(bgMusicFilePath && fs.existsSync(bgMusicFilePath) && levels.bgMusic > 0);
+  const hasCrackle = !!(
+    crackleFilePath &&
+    fs.existsSync(crackleFilePath) &&
+    levels.crackle > 0.005
+  );
+
+  console.log(
+    `[AudioEngine] master request: preset=${filterPreset} voice=${voiceDuration.toFixed(2)}s ` +
+      `bg=${hasBg ? `${levels.bgMusic}` : 'none'} crackle=${hasCrackle ? levels.crackle : 'none'} ` +
+      `(requested crackle=${crackleIntensity})`
+  );
+
+  for (const attempt of ATTEMPTS) {
+    const useBg = hasBg && attempt.withBg;
+    const useCrackle = hasCrackle && attempt.withCrackle;
+    if (!useBg && !useCrackle && attempt.strategy !== 'voice-only') {
+      // Voice-only variants are still worth running, everything else is a no-op.
+    }
+
     try {
-      const result2 = await new Promise<AudioProcessResult>((resolve, reject) => {
-        const command = ffmpeg();
-        command.input(voiceFilePath).inputOptions(['-nostdin', '-vn']);
+      const result = await runMix({
+        voiceFilePath,
+        outputFilePath,
+        voiceFilter,
+        bgMusicFilePath: useBg ? bgMusicFilePath! : null,
+        crackleFilePath: useCrackle ? crackleFilePath! : null,
+        levels,
+        voiceDuration,
+        attempt,
+        filterPreset,
+      });
+      console.log(
+        `[AudioEngine] master OK via ${attempt.strategy} (bg=${useBg} crackle=${useCrackle}) ` +
+          `duration=${result.durationSeconds.toFixed(2)}s size=${result.bytes}B`
+      );
+      return {
+        durationSeconds: result.durationSeconds,
+        outputFilePath,
+        container: 'mp3',
+        strategy: attempt.strategy,
+        mix: {
+          voice: true,
+          bgMusic: useBg,
+          crackle: useCrackle,
+          filterPreset,
+          levels: useBg || useCrackle ? levels : null,
+        },
+      };
+    } catch (err: any) {
+      console.warn(`[AudioEngine] attempt "${attempt.strategy}" (bg=${useBg},crackle=${useCrackle},polish=${attempt.polish}) failed: ${err?.message || err}`);
+    }
+  }
 
-        const filters: string[] = [];
-        let idx = 1;
-        let mix = '[v0]';
-        filters.push(`[0:a]${voiceFilter}[v0]`);
+  return passthrough(voiceFilePath, outputFilePath, filterPreset, levels);
+}
 
-        if (hasBgMusic) {
-          command.input(bgMusicFilePath!).inputOptions(['-nostdin', '-vn']);
-          filters.push(`[${idx}:a]volume=${bgMusicVolume},aloop=loop=-1:size=2e+09[bg]`);
-          mix += '[bg]';
-          idx++;
+interface RunMixArgs {
+  voiceFilePath: string;
+  outputFilePath: string;
+  voiceFilter: string;
+  bgMusicFilePath: string | null;
+  crackleFilePath: string | null;
+  levels: MixLevels;
+  voiceDuration: number;
+  attempt: AttemptConfig;
+  filterPreset: FilterPresetType;
+}
+
+function runMix({
+  voiceFilePath,
+  outputFilePath,
+  voiceFilter,
+  bgMusicFilePath,
+  crackleFilePath,
+  levels,
+  voiceDuration,
+  attempt,
+  filterPreset,
+}: RunMixArgs): Promise<{ durationSeconds: number; bytes: number }> {
+  return new Promise((resolve, reject) => {
+    try {
+      if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath);
+    } catch {}
+
+    const extra: { file: string; gain: number; tag: string }[] = [];
+    if (bgMusicFilePath) extra.push({ file: bgMusicFilePath, gain: levels.bgMusic, tag: 'bg' });
+    if (crackleFilePath) extra.push({ file: crackleFilePath, gain: levels.crackle, tag: 'crk' });
+
+    const inputCount = 1 + extra.length;
+    // One-loop buffer instead of the old `size=2e9`: bounded memory, same result
+    // because `atrim` clamps to the voice length anyway.
+    const aloopSamples = Math.max(4410, Math.ceil(voiceDuration * 44100));
+    const chains: string[] = [];
+    const command = ffmpeg();
+
+    command.input(voiceFilePath).inputOptions(['-nostdin', '-vn']);
+    chains.push(
+      `[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,${voiceFilter}[voice]`
+    );
+
+    let label = '[voice]';
+    extra.forEach((track, i) => {
+      const index = i + 1;
+      const command_ = command.input(track.file);
+      if (attempt.useStreamLoop) {
+        command_.inputOptions(['-nostdin', '-vn', '-stream_loop', '-1', '-t', voiceDuration.toFixed(3)]);
+        chains.push(
+          `[${index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${track.gain.toFixed(4)}[${track.tag}]`
+        );
+      } else {
+        command_.inputOptions(['-nostdin', '-vn']);
+        chains.push(
+          `[${index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${track.gain.toFixed(4)},aloop=loop=-1:size=${aloopSamples},atrim=0:${voiceDuration.toFixed(3)},asetpts=N/SR/TB[${track.tag}]`
+        );
+      }
+      label += `[${track.tag}]`;
+    });
+
+    // Undo amix's 1/N renormalisation, then keep the master out of clipping.
+    const compensation = (inputCount * MASTER_TRIM).toFixed(3);
+    let tail = `amix=inputs=${inputCount}:duration=first:dropout_transition=0`;
+    if (inputCount > 1) tail += `,volume=${compensation}`;
+    if (attempt.polish) {
+      const fadeOutStart = Math.max(0.05, voiceDuration - 0.45).toFixed(3);
+      tail += `,alimiter=limit=0.92:level=false,afade=t=in:d=0.012,afade=t=out:st=${fadeOutStart}:d=0.45`;
+    }
+
+    if (inputCount > 1) {
+      chains.push(`${label}${tail}[master]`);
+      command.complexFilter(chains, 'master');
+    } else {
+      // Single input: no need for a filtergraph, a plain chain is faster.
+      command.audioFilter(
+        `${voiceFilter}${attempt.polish ? ',alimiter=limit=0.92:level=false' : ''}`
+      );
+    }
+
+    command
+      .outputOptions([
+        '-nostdin',
+        '-threads',
+        '2',
+        '-vn',
+        '-t',
+        voiceDuration.toFixed(3),
+        '-map_metadata',
+        '-1',
+      ])
+      .audioCodec('libmp3lame')
+      .audioBitrate(192)
+      .audioChannels(2)
+      .audioFrequency(44100)
+      .output(outputFilePath)
+      .on('start', (cmd) => console.log('[AudioEngine] cmd:', cmd.replace(/\s+/g, ' ').slice(0, 320)))
+      .on('end', async () => {
+        try {
+          const bytes = fs.existsSync(outputFilePath) ? fs.statSync(outputFilePath).size : 0;
+          if (bytes < 2048) throw new Error(`output too small (${bytes}B)`);
+          const duration = await probeDurationSeconds(outputFilePath);
+          if (!duration || duration < 0.4) throw new Error('output has no playable duration');
+          resolve({ durationSeconds: Number(Math.min(duration, voiceDuration + 1).toFixed(2)), bytes });
+        } catch (err: any) {
+          reject(err);
         }
-        if (hasCrackle) {
-          command.input(crackleFilePath!).inputOptions(['-nostdin', '-vn']);
-          filters.push(`[${idx}:a]volume=${crackleVolume.toFixed(4)},aloop=loop=-1:size=2e+09[crk]`);
-          mix += '[crk]';
-          idx++;
-        }
-
-        if (idx > 1) {
-          filters.push(`${mix}amix=inputs=${idx}:duration=first:dropout_transition=0[outa]`);
-          command.complexFilter(filters, 'outa');
-          command.outputOptions(['-nostdin', '-threads', '1', '-vn', '-shortest']);
-        } else {
-          command.audioFilter(voiceFilter);
-          command.outputOptions(['-nostdin', '-threads', '1', '-vn']);
-        }
-
-        command
-          .audioCodec('libmp3lame')
-          .audioBitrate(192)
-          .audioChannels(2)
-          .audioFrequency(44100)
-          .output(outputFilePath)
-          .on('end', async () => {
-            const dur = await getAudioDuration(outputFilePath);
-            console.log('[AudioEngine] Fallback aloop mix SUCCESS');
-            resolve({ durationSeconds: dur, outputFilePath });
-          })
-          .on('error', (err) => {
-            console.warn('[AudioEngine] Fallback aloop ERROR:', err.message);
-            reject(err);
-          })
-          .run();
+      })
+      .on('error', (err, _stdout, stderr) => {
+        const tailMsg = String(stderr || '').trim().split('\n').slice(-3).join(' | ');
+        reject(new Error(`${err.message}${tailMsg ? ` :: ${tailMsg}` : ''}`));
       });
 
-      if (fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 500) {
-        return result2;
-      }
+    // A hung transcode is worse than a shorter one: kill it and let the next
+    // (cheaper) attempt run. 90s covers ~10 minutes of audio on serverless.
+    const watchdog = setTimeout(() => {
+      try {
+        command.kill('SIGKILL');
+      } catch {}
+      reject(new Error('ffmpeg timeout after 90s'));
+    }, 90_000);
+
+    command.once('exit', () => clearTimeout(watchdog));
+    command.run();
+  });
+}
+
+/**
+ * Last resort: give the browser the upload verbatim. We relabel with the real
+ * container (never an .mp3 that is actually webm, which is what made records
+ * silent on Safari) and only after trying a quick straight transcode.
+ */
+async function passthrough(
+  voiceFilePath: string,
+  outputFilePath: string,
+  filterPreset: FilterPresetType,
+  levels: MixLevels
+): Promise<AudioProcessResult> {
+  const durationSeconds = await probeDurationSeconds(voiceFilePath);
+
+  // Best effort: a plain transcode keeps the vintage tone without any mixing.
+  const simple = await new Promise<boolean>((resolve) => {
+    try {
+      if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath);
     } catch {}
+    ffmpeg(voiceFilePath)
+      .inputOptions(['-nostdin', '-vn'])
+      .audioFilter(getVoiceFilterString(filterPreset))
+      .outputOptions(['-nostdin', '-threads', '2', '-vn'])
+      .audioCodec('libmp3lame')
+      .audioBitrate(192)
+      .audioChannels(2)
+      .audioFrequency(44100)
+      .on('end', () => resolve(true))
+      .on('error', (err) => {
+        console.warn('[AudioEngine] voice-only transcode failed:', err.message);
+        resolve(false);
+      })
+      .save(outputFilePath);
+  });
+
+  if (simple && fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 1024) {
+    console.warn('[AudioEngine] served a voice-only master (no BG/crackle bed applied)');
+    return {
+      durationSeconds,
+      outputFilePath,
+      container: 'mp3',
+      strategy: 'voice-only',
+      mix: { voice: true, bgMusic: false, crackle: false, filterPreset, levels: null },
+    };
   }
 
-  // Fallback 2: Voice only with vintage filter
-  try {
-    const result3 = await new Promise<AudioProcessResult>((resolve, reject) => {
-      ffmpeg(voiceFilePath)
-        .inputOptions(['-nostdin', '-vn'])
-        .audioFilter(voiceFilter)
-        .outputOptions(['-nostdin', '-threads', '1', '-vn'])
-        .audioCodec('libmp3lame')
-        .audioBitrate(192)
-        .audioChannels(2)
-        .audioFrequency(44100)
-        .output(outputFilePath)
-        .on('end', async () => {
-          const dur = await getAudioDuration(outputFilePath);
-          console.log('[AudioEngine] Voice-only filter SUCCESS (BG/crackle missing in this fallback)');
-          resolve({ durationSeconds: dur, outputFilePath });
-        })
-        .on('error', (err) => {
-          console.warn('[AudioEngine] Voice-only ERROR:', err.message);
-          reject(err);
-        })
-        .run();
-    });
-
-    if (fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 100) {
-      return result3;
-    }
-  } catch {}
-
-  // Last resort: copy
   try {
     await fs.promises.copyFile(voiceFilePath, outputFilePath);
-    const dur = await getAudioDuration(outputFilePath);
-    console.warn('[AudioEngine] Raw copy fallback - NO effects!');
-    return { durationSeconds: dur, outputFilePath };
   } catch {
     throw new Error('Audio processor was unable to finalize the audio recording.');
+  }
+  console.warn('[AudioEngine] served the raw upload unchanged (no ffmpeg effects available)');
+  return {
+    durationSeconds,
+    outputFilePath,
+    container: 'source',
+    strategy: 'passthrough',
+    mix: { voice: true, bgMusic: false, crackle: false, filterPreset, levels: null },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Raw take + helpers used by the API route                           */
+/* ------------------------------------------------------------------ *
+
+/**
+ * Convert the uploaded recording (webm/opus, m4a, wav…) into a small MP3 so
+ * the "original take" fallback plays everywhere. Returns null if the engine
+ * cannot run at all — the caller then stores the original bytes.
+ */
+export async function transcodeToMp3(inputFilePath: string, outputFilePath: string): Promise<boolean> {
+  resolveBinaries();
+  if (!resolvedFfmpegPath) return false;
+  try {
+    if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath);
+  } catch {}
+
+  return new Promise((resolve) => {
+    ffmpeg(inputFilePath)
+      .inputOptions(['-nostdin', '-vn'])
+      .outputOptions(['-nostdin', '-threads', '2', '-vn', '-ac', '2', '-ar', '44100'])
+      .audioCodec('libmp3lame')
+      .audioBitrate(160)
+      .on('end', () => {
+        const ok = fs.existsSync(outputFilePath) && fs.statSync(outputFilePath).size > 1024;
+        resolve(ok);
+      })
+      .on('error', (err) => {
+        console.warn('[AudioEngine] raw take transcode failed:', err.message);
+        resolve(false);
+      })
+      .save(outputFilePath);
+  });
+}
+
+/** Where temp files live: /tmp on serverless, a scratch dir locally. */
+export function audioScratchDir(): string {
+  const dir = path.join(os.tmpdir(), 'vynyl_tmp');
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return os.tmpdir();
   }
 }

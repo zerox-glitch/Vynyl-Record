@@ -19,42 +19,22 @@ import {
   ArrowRight,
   ShieldCheck,
   Heart,
-  Flame,
-  Sofa,
   Music,
   Home
 } from 'lucide-react';
 
-// Cozy Gramophone Room Hero - SSR Safe
-const CozyGramophoneRoom = dynamic(
-  () => import('@/components/3d/CozyGramophoneRoom'),
+// 3D anime turntable hero — client-only (WebGL), the single canvas of the page.
+const AnimeTurntablePlayer = dynamic(
+  () => import('@/components/3d/AnimeTurntablePlayer').then((m) => m.AnimeTurntablePlayer),
   {
     ssr: false,
     loading: () => (
-      <div className="w-full h-full min-h-[520px] flex flex-col items-center justify-center bg-gradient-to-b from-stone-900/60 to-stone-950/80 rounded-3xl border border-amber-900/30">
-        <div className="w-16 h-16 rounded-full bg-amber-950/50 border border-amber-600/30 flex items-center justify-center animate-pulse">
-          <Disc3 className="w-8 h-8 text-amber-500 animate-spin" />
+      <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-b from-[#ffd9b8] to-[#7c4f57]">
+        <div className="w-16 h-16 rounded-full bg-black/25 border border-amber-200/50 flex items-center justify-center animate-pulse">
+          <Disc3 className="w-8 h-8 text-amber-100 animate-spin" />
         </div>
-        <span className="text-xs font-mono text-amber-300 mt-4 tracking-widest uppercase">
-          Building Cozy Listening Room...
-        </span>
-        <span className="text-[10px] font-serif text-stone-500 mt-2 text-center px-4">
-          Fireplace crackling • Brass horn polishing • Persian rug laying
-        </span>
-      </div>
-    ),
-  }
-);
-
-const FloatingVinylHero = dynamic(
-  () => import('@/components/3d/FloatingVinylHero'),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="w-full h-full min-h-[380px] flex flex-col items-center justify-center">
-        <Disc3 className="w-12 h-12 text-amber-500 animate-spin" />
-        <span className="text-xs font-mono text-amber-400/80 mt-3 tracking-widest uppercase">
-          Loading 3D Digital Wax...
+        <span className="text-[11px] font-mono text-stone-900/70 mt-4 tracking-[0.2em] uppercase">
+          Cleaning the stylus…
         </span>
       </div>
     ),
@@ -74,32 +54,34 @@ export default async function HomePage() {
     <div className="min-h-screen bg-[#0c0a09] text-stone-100 flex flex-col selection:bg-amber-600 selection:text-white">
       <Navbar />
 
-      {/* Hero Section - Cozy Vintage Listening Room */}
+      {/* Hero Section - 3D anime turntable */}
       <section className="relative w-full pt-6 pb-16 lg:pt-12 lg:pb-24 overflow-hidden">
-        {/* Warm cozy background glows */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[800px] pointer-events-none">
-          <div className="absolute top-20 left-1/4 w-[600px] h-[600px] bg-amber-600/10 rounded-full blur-[120px]" />
-          <div className="absolute top-40 right-1/4 w-[500px] h-[500px] bg-orange-600/8 rounded-full blur-[100px]" />
-          <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-stone-800/20 rounded-full blur-[80px]" />
-        </div>
+        {/* Warm background wash — gradients instead of blurred layers: no
+            120px backdrop blurs to repaint while scrolling. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-[820px]"
+          style={{
+            background:
+              'radial-gradient(70% 46% at 26% 8%, rgba(217,119,6,0.16), transparent 70%), radial-gradient(56% 40% at 78% 26%, rgba(234,88,12,0.13), transparent 72%), radial-gradient(90% 40% at 50% 100%, rgba(68,64,60,0.35), transparent 70%)',
+          }}
+        />
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
             {/* Left Content - 6 cols */}
             <div className="lg:col-span-6 space-y-7 text-left z-10">
-              {/* Cozy badges */}
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/70 border border-amber-500/40 text-amber-300 text-xs font-mono uppercase tracking-wider">
-                  <Home className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Cozy Vintage Room</span>
+                  <Disc3 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>3D Anime Turntable</span>
                 </span>
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-amber-900/30 text-stone-300 text-xs font-mono uppercase tracking-wider">
                   <Music className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Brass Gramophone</span>
+                  <span>Real Needle Drop</span>
                 </span>
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-stone-800 text-stone-300 text-xs font-mono uppercase tracking-wider">
-                  <Flame className="w-3.5 h-3.5 text-orange-400" />
-                  <span>Fireplace Lit • Interactive</span>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Lightweight • No Full Screen</span>
                 </span>
               </div>
 
@@ -108,7 +90,7 @@ export default async function HomePage() {
                   {heroCopy.headline}
                 </h1>
                 <p className="text-base sm:text-lg text-stone-300/90 font-serif leading-relaxed max-w-xl">
-                  {heroCopy.subheadline} Step into a warm 1920s study — fireplace crackling, brass gramophone horn glowing, Persian rug underfoot. Your voice preserved in digital wax, playable in a cozy interactive room.
+                  {heroCopy.subheadline} Your voice pressed onto a hand-painted 3D record: the arm swings out, the stylus lands, and the wax starts turning. Orbit it, zoom in on the label, hear the crackle.
                 </p>
               </div>
 
@@ -133,15 +115,15 @@ export default async function HomePage() {
                       className="w-full sm:w-auto text-base px-6 py-4"
                       leftIcon={<Volume2 className="w-4 h-4 text-amber-400" />}
                     >
-                      Enter Listening Room
+                      Hear the difference
                     </Button>
                   </Link>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 text-xs text-stone-400 pt-1 font-mono">
                   <span className="flex items-center gap-1.5">
-                    <Sofa className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Cozy room • Drag to explore</span>
+                    <Home className="w-3.5 h-3.5 text-amber-500" />
+                    <span>One canvas • Drag to orbit</span>
                   </span>
                   <span>•</span>
                   <span className="flex items-center gap-1.5">
@@ -177,23 +159,22 @@ export default async function HomePage() {
               </div>
             </div>
 
-            {/* Right - Cozy Room Hero - 6 cols */}
+            {/* Right - 3D turntable hero */}
             <div className="lg:col-span-6 relative flex flex-col gap-4">
-              <div className="w-full rounded-3xl overflow-hidden border border-amber-900/30 shadow-2xl bg-stone-950 relative">
-                <div className="absolute top-0 left-0 right-0 z-10 p-3 flex items-center justify-between pointer-events-none">
-                  <span className="px-2.5 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-amber-500/30 text-amber-300 font-mono text-[10px] uppercase tracking-wider">
-                    Interactive • Drag to Explore Room
+              <div className="relative w-full overflow-hidden rounded-3xl border border-amber-900/30 shadow-2xl">
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between p-3">
+                  <span className="px-2.5 py-1 rounded-full border border-white/20 bg-black/35 text-[10px] uppercase tracking-wider font-mono text-amber-100">
+                    Interactive • drag to orbit
                   </span>
-                  <span className="px-2.5 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-stone-700 text-stone-400 font-mono text-[10px]">
-                    Fireplace • Rug • Gramophone
+                  <span className="px-2.5 py-1 rounded-full border border-white/15 bg-black/30 text-[10px] font-mono text-stone-200">
+                    33⅓ rpm • cel-shaded
                   </span>
                 </div>
 
-                <div className="w-full h-[520px] sm:h-[600px]">
-                  <Suspense fallback={<div className="h-full flex items-center justify-center"><Disc3 className="w-8 h-8 text-amber-500 animate-spin" /></div>}>
-                    <CozyGramophoneRoom
-                      isPlaying={false}
-                      isNeedleDropping={false}
+                <div className="w-full h-[420px] sm:h-[520px]">
+                  <Suspense fallback={<div className="h-full w-full bg-stone-950" />}>
+                    <AnimeTurntablePlayer
+                      isPlaying
                       vinylStyle="gold_edition"
                       title="Our Anniversary"
                       recipientName="Eleanor"
@@ -202,25 +183,30 @@ export default async function HomePage() {
                   </Suspense>
                 </div>
 
-                <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-stone-950/90 to-transparent pointer-events-none">
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-stone-950/90 to-transparent">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-mono text-amber-300/80">Cozy Vintage Listening Room • 1920s Study</span>
-                    <span className="text-[10px] font-mono text-stone-500">Scroll to zoom • Drag to orbit</span>
+                    <span className="text-[11px] font-mono text-amber-200/85">Brass tonearm tracking inward · stylus lit</span>
+                    <span className="text-[10px] font-mono text-stone-300/80">scroll to zoom</span>
                   </div>
                 </div>
               </div>
 
-              {/* Small vinyl preview below room */}
-              <div className="w-full rounded-2xl bg-stone-900/60 border border-amber-900/20 p-3 flex items-center gap-3">
-                <div className="w-24 h-24 rounded-xl overflow-hidden border border-amber-600/20 flex-shrink-0">
-                  <Suspense fallback={<div className="h-full flex items-center justify-center"><Disc3 className="w-6 h-6 text-amber-500 animate-spin" /></div>}>
-                    <FloatingVinylHero />
-                  </Suspense>
+              {/* CSS-only vinyl teaser: no second WebGL context needed */}
+              <div className="w-full rounded-2xl border border-amber-900/20 bg-stone-900/60 p-3 flex items-center gap-3">
+                <div className="relative h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl border border-amber-600/20 bg-gradient-to-br from-[#241a15] to-[#0f0b09]">
+                  <div className="absolute inset-0 m-auto h-[74%] w-[74%] animate-[spin_3.6s_linear_infinite] rounded-full bg-[#141210] shadow-[inset_0_0_18px_rgba(0,0,0,0.9)]">
+                    <div className="absolute inset-0 rounded-full" style={{ background: 'repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,0.05) 0 1px, transparent 1px 4px)' }} />
+                    <div className="absolute inset-0 m-auto h-[34%] w-[34%] rounded-full bg-gradient-to-br from-amber-500 to-amber-800" />
+                    <div className="absolute inset-0 m-auto h-[7%] w-[7%] rounded-full bg-[#0f0b09]" />
+                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-serif font-bold text-amber-100">Also includes classic turntable view</p>
-                  <p className="text-[11px] text-stone-400 leading-relaxed mt-1">
-                    Every record can be played in both the cozy gramophone room and the classic 3D turntable. Needle drop, crackle, and background atmosphere are baked into the mastered MP3 — identical every playback.
+                  <p className="text-xs font-serif font-bold text-amber-100">One scene, everywhere</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-stone-400">
+                    The same turntable is used on the hero, in the studio and on every record link — the
+                    needle drop, crackle and background music are mixed into the mastered MP3 once, so
+                    playback is identical every time.
                   </p>
                 </div>
               </div>
@@ -242,7 +228,7 @@ export default async function HomePage() {
                 Frequently Asked Questions
               </h3>
               <p className="text-xs sm:text-sm text-stone-400">
-                Everything about the cozy listening room and vintage wax pressing.
+                Everything about the 3D turntable and vintage wax pressing.
               </p>
             </div>
 
@@ -274,7 +260,7 @@ export default async function HomePage() {
             A Voice Note That Will Never Be Forgotten
           </h2>
           <p className="text-sm sm:text-base text-stone-300 max-w-xl mx-auto leading-relaxed">
-            Don&apos;t let precious words fade in chat apps. Press your voice into warm brass gramophone wax, with fireplace glow and background atmosphere — preserved forever in a cozy room.
+            Don&apos;t let precious words fade in chat apps. Press your voice onto warm 3D vinyl — needle drop, crackle and background atmosphere baked into one master, preserved forever behind a shareable link.
           </p>
           <div className="pt-2">
             <Link href="/studio">
