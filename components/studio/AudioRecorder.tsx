@@ -12,6 +12,7 @@ interface AudioRecorderProps {
   maxDurationSeconds?: number;
   isPremium?: boolean;
   onTriggerUpgrade?: () => void;
+  onRecordingStateChange?: (state: 'idle' | 'recording' | 'paused' | 'stopped') => void;
 }
 
 export const AudioRecorder: React.FC<AudioRecorderProps> = ({
@@ -20,8 +21,14 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({
   maxDurationSeconds = 60,
   isPremium = false,
   onTriggerUpgrade,
+  onRecordingStateChange,
 }) => {
   const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'paused' | 'stopped'>('idle');
+
+  // Notify parent of recording state for fullscreen room
+  useEffect(() => {
+    if (onRecordingStateChange) onRecordingStateChange(recordingState);
+  }, [recordingState, onRecordingStateChange]);
   const [duration, setDuration] = useState<number>(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState<boolean>(false);
