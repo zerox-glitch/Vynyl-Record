@@ -35,3 +35,8 @@ next-env.d.ts
 # temporary audio processing cache
 /tmp/*
 !/tmp/.gitkeep
+
+# pressed masters written by the audio engine during local dev
+/public/records/*
+!/public/records/.gitkeep
+/public/audio/custom-*

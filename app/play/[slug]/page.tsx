@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -11,6 +11,7 @@ import { Modal } from '@/components/ui/Modal';
 import { ParchmentLyricCard } from '@/components/3d/ParchmentLyricCard';
 import { Recording } from '@/types';
 import { DEMO_RECORDINGS, VINYL_STYLES, FILTER_PRESETS } from '@/lib/constants';
+import { useVinylPlayer } from '@/lib/audio/useVinylPlayer';
 import {
   Play,
   Pause,
@@ -23,30 +24,24 @@ import {
   Check,
   Disc3,
   Mic,
-  Maximize2,
-  Minimize2,
-  Flame,
-  Sofa,
-  Music,
   Sparkles,
+  AlertTriangle,
+  Keyboard,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-// Cozy Gramophone Room - SSR Safe
-const CozyGramophoneRoom = dynamic(
-  () => import('@/components/3d/CozyGramophoneRoom'),
+// 3D anime turntable — SSR unsafe, and only mounted once per page.
+const AnimeTurntablePlayer = dynamic(
+  () => import('@/components/3d/AnimeTurntablePlayer').then((m) => m.AnimeTurntablePlayer),
   {
     ssr: false,
     loading: () => (
-      <div className="w-full h-full min-h-[560px] flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1917] to-[#0c0a09] rounded-3xl border border-amber-900/30">
-        <div className="w-20 h-20 rounded-full bg-amber-950/50 border border-amber-600/30 flex items-center justify-center animate-pulse">
-          <Disc3 className="w-10 h-10 text-amber-500 animate-spin" />
+      <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-b from-[#ffd9b8] to-[#7c4f57]">
+        <div className="flex h-16 w-16 animate-pulse items-center justify-center rounded-full border border-amber-200/50 bg-black/25">
+          <Disc3 className="h-8 w-8 animate-spin text-amber-200" />
         </div>
-        <span className="text-xs font-mono text-amber-300 mt-5 tracking-widest uppercase">
-          Building Cozy Listening Room...
-        </span>
-        <span className="text-[10px] font-serif text-stone-400 mt-2">
-          Polishing brass horn • Lighting fireplace • Laying Persian rug
+        <span className="mt-4 font-mono text-[11px] uppercase tracking-[0.2em] text-stone-900/70">
+          Threading the tonearm…
         </span>
       </div>
     ),
@@ -55,233 +50,120 @@ const CozyGramophoneRoom = dynamic(
 
 export default function PlayRecordingPage() {
   const params = useParams();
-  const slug = params?.slug as string;
+  const slug = (params?.slug as string) || '';
 
   const [recording, setRecording] = useState<Recording | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
-  const [volume, setVolume] = useState<number>(0.85);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-
   const [shareModalOpen, setShareModalOpen] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [isListeningFullscreen, setIsListeningFullscreen] = useState<boolean>(false);
-
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const needleDropAudioRef = useRef<HTMLAudioElement | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const needleDropTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [isNeedleDropping, setIsNeedleDropping] = useState<boolean>(false);
-
-  const NEEDLE_DROP_DELAY_MS = 1150;
-
-  const clearNeedleDropTimeout = () => {
-    if (needleDropTimeoutRef.current) {
-      clearTimeout(needleDropTimeoutRef.current);
-      needleDropTimeoutRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    return () => clearNeedleDropTimeout();
-  }, []);
-
-  // Auto fullscreen when listening starts - cozy immersive experience
-  useEffect(() => {
-    if (isPlaying || isNeedleDropping) {
-      setIsListeningFullscreen(true);
-    }
-  }, [isPlaying, isNeedleDropping]);
-
-  // Exit listening fullscreen when paused and at beginning
-  useEffect(() => {
-    if (!isPlaying && !isNeedleDropping && currentTime < 0.5) {
-      // Keep fullscreen for a moment then allow exit, but don't auto-exit immediately
-      // User can manually exit with button
-    }
-  }, [isPlaying, isNeedleDropping, currentTime]);
+  const [showKeyboardHint, setShowKeyboardHint] = useState<boolean>(true);
 
   useEffect(() => {
     if (!slug) return;
     setLoading(true);
-    fetch(`/api/play/${slug}`)
+    const fallbackDemo = () =>
+      DEMO_RECORDINGS.find((r) => r.slug.toLowerCase() === decodeURIComponent(slug).toLowerCase()) ||
+      DEMO_RECORDINGS[0];
+
+    fetch(`/api/play/${encodeURIComponent(slug)}`)
       .then((res) => {
         if (!res.ok) throw new Error('Not found');
         return res.json();
       })
       .then((data) => {
-        if (data.recording) setRecording(data.recording);
-        else {
-          const fallback = DEMO_RECORDINGS.find((r) => r.slug.toLowerCase() === slug.toLowerCase()) || DEMO_RECORDINGS[0];
-          setRecording(fallback);
-        }
+        setRecording(data?.recording ? data.recording : fallbackDemo());
       })
-      .catch(() => {
-        const fallback = DEMO_RECORDINGS.find((r) => r.slug.toLowerCase() === slug.toLowerCase()) || DEMO_RECORDINGS[0];
-        setRecording(fallback);
-      })
+      .catch(() => setRecording(fallbackDemo()))
       .finally(() => setLoading(false));
   }, [slug]);
 
-  const triggerNeedleDropThenPlayMain = (fromTime: number = 0) => {
-    if (!audioRef.current) return;
-    clearNeedleDropTimeout();
-    audioRef.current.currentTime = fromTime;
-    setCurrentTime(fromTime);
-    audioRef.current.volume = isMuted ? 0 : volume;
+  const handlePlayerError = useCallback((message: string) => {
+    toast.error(message, { duration: 6000 });
+  }, []);
 
-    if (needleDropAudioRef.current) {
-      try {
-        needleDropAudioRef.current.pause();
-      } catch {}
-      needleDropAudioRef.current.currentTime = 0;
-      needleDropAudioRef.current.volume = isMuted ? 0 : Math.min(1, volume + 0.05);
-      needleDropAudioRef.current.play().catch(() => {});
-    }
+  const player = useVinylPlayer({
+    src: recording?.processed_audio_url,
+    fallbackSrc: recording?.raw_voice_url && recording.raw_voice_url !== recording.processed_audio_url
+      ? recording.raw_voice_url
+      : null,
+    needleSrc: '/audio/needle-drop.mp3',
+    needleDelayMs: 1150,
+    onError: handlePlayerError,
+  });
 
-    setIsNeedleDropping(true);
-    setIsPlaying(true);
+  const {
+    isPlaying,
+    isNeedleDropping,
+    isReady,
+    isLoading,
+    error: playerError,
+    currentTime,
+    duration,
+    volume,
+    isMuted,
+    toggle,
+    restart,
+    seek,
+    setVolume,
+    toggleMute,
+  } = player;
 
-    needleDropTimeoutRef.current = setTimeout(() => {
-      setIsNeedleDropping(false);
-      if (audioRef.current) {
-        audioRef.current.currentTime = fromTime;
-        audioRef.current.volume = isMuted ? 0 : volume;
-        audioRef.current.play().catch((err) => {
-          console.warn('Main audio play error after needle drop:', err);
-          setIsPlaying(false);
-        });
+  const totalDuration = duration || recording?.duration_seconds || 0;
+  const progress = totalDuration > 0 ? Math.min(100, (currentTime / totalDuration) * 100) : 0;
+
+  // Space = play/pause, ← → = skip. Ignored while typing.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (target?.isContentEditable) return;
+      if (event.code === 'Space' || event.key === 'k') {
+        event.preventDefault();
+        setShowKeyboardHint(false);
+        toggle();
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        seek(Math.min(totalDuration || Infinity, currentTime + 5));
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        seek(Math.max(0, currentTime - 5));
+      } else if (event.key === 'm') {
+        toggleMute();
       }
-    }, NEEDLE_DROP_DELAY_MS);
-  };
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggle, seek, toggleMute, currentTime, totalDuration]);
 
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    if (isPlaying || isNeedleDropping) {
-      clearNeedleDropTimeout();
-      try {
-        audioRef.current.pause();
-      } catch {}
-      if (needleDropAudioRef.current) {
-        try {
-          needleDropAudioRef.current.pause();
-          needleDropAudioRef.current.currentTime = 0;
-        } catch {}
-      }
-      setIsPlaying(false);
-      setIsNeedleDropping(false);
-      return;
-    }
-
-    const audioCurrent = audioRef.current.currentTime;
-    const atBeginning = audioCurrent < 0.7 || currentTime < 0.7;
-    const atEnd = duration > 0 && audioCurrent >= duration - 0.35;
-
-    if (atBeginning || atEnd) {
-      triggerNeedleDropThenPlayMain(0);
-    } else {
-      audioRef.current.volume = isMuted ? 0 : volume;
-      audioRef.current.play().catch((err) => console.warn('Audio play error:', err));
-      setIsPlaying(true);
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
-  };
-  const handleLoadedMetadata = () => {
-    if (audioRef.current) setDuration(audioRef.current.duration || 10);
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const target = parseFloat(e.target.value);
-    if (!audioRef.current) return;
-    if (target < 0.5 && (isPlaying || isNeedleDropping)) {
-      triggerNeedleDropThenPlayMain(0);
-      return;
-    }
-    clearNeedleDropTimeout();
-    if (isNeedleDropping) {
-      setIsNeedleDropping(false);
-      if (needleDropAudioRef.current) {
-        try {
-          needleDropAudioRef.current.pause();
-          needleDropAudioRef.current.currentTime = 0;
-        } catch {}
-      }
-    }
-    audioRef.current.currentTime = target;
-    setCurrentTime(target);
-  };
+  useEffect(() => {
+    if (!isPlaying) return;
+    const timer = setTimeout(() => setShowKeyboardHint(false), 4000);
+    return () => clearTimeout(timer);
+  }, [isPlaying]);
 
   const handleWordJump = (startTime: number) => {
-    if (!audioRef.current) return;
-    if (startTime < 0.6) {
-      triggerNeedleDropThenPlayMain(startTime);
+    setShowKeyboardHint(false);
+    if (!isReady) {
+      toast('The wax is still buffering…', { icon: '⏳' });
       return;
     }
-    clearNeedleDropTimeout();
-    setIsNeedleDropping(false);
-    if (needleDropAudioRef.current) {
-      try {
-        needleDropAudioRef.current.pause();
-        needleDropAudioRef.current.currentTime = 0;
-      } catch {}
-    }
-    audioRef.current.currentTime = startTime;
-    setCurrentTime(startTime);
-    audioRef.current.volume = isMuted ? 0 : volume;
-    audioRef.current.play().catch(() => {});
-    setIsPlaying(true);
-  };
-
-  const handleRestart = () => {
-    if (!audioRef.current) return;
-    triggerNeedleDropThenPlayMain(0);
-  };
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setVolume(val);
-    if (audioRef.current) audioRef.current.volume = val;
-    if (needleDropAudioRef.current) needleDropAudioRef.current.volume = Math.min(1, val + 0.05);
-    if (val > 0) setIsMuted(false);
-  };
-
-  const toggleMute = () => {
-    if (isMuted) {
-      if (audioRef.current) audioRef.current.volume = volume;
-      if (needleDropAudioRef.current) needleDropAudioRef.current.volume = Math.min(1, volume + 0.05);
-      setIsMuted(false);
-    } else {
-      if (audioRef.current) audioRef.current.volume = 0;
-      if (needleDropAudioRef.current) needleDropAudioRef.current.volume = 0;
-      setIsMuted(true);
-    }
+    player.play(startTime);
   };
 
   const handleCopyLink = () => {
     const url = typeof window !== 'undefined' ? window.location.href : '';
-    navigator.clipboard.writeText(url);
-    setCopiedLink(true);
-    toast.success('✨ Link copied to clipboard!');
-    setTimeout(() => setCopiedLink(false), 2500);
-  };
-
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
-    }
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        setCopiedLink(true);
+        toast.success('✨ Link copied to clipboard!');
+        setTimeout(() => setCopiedLink(false), 2500);
+      })
+      .catch(() => toast.error('Could not reach the clipboard — copy the address bar instead.'));
   };
 
   const formatTime = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
@@ -292,14 +174,13 @@ export default function PlayRecordingPage() {
 
   if (loading || !recording) {
     return (
-      <div className="min-h-screen bg-[#0c0a09] flex flex-col justify-between text-stone-100">
+      <div className="flex min-h-screen flex-col justify-between bg-[#0c0a09] text-stone-100">
         <Navbar />
-        <div className="flex-1 flex flex-col items-center justify-center space-y-4">
-          <div className="w-16 h-16 rounded-full bg-amber-950/50 border border-amber-700/30 flex items-center justify-center">
-            <Disc3 className="w-8 h-8 text-amber-500 animate-spin" />
+        <div className="flex flex-1 flex-col items-center justify-center space-y-4">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full border border-amber-700/30 bg-amber-950/50">
+            <Disc3 className="h-8 w-8 animate-spin text-amber-500" />
           </div>
-          <p className="text-sm font-serif text-amber-200">Opening the vintage listening room...</p>
-          <p className="text-xs font-mono text-stone-500">Dusting gramophone horn • Stoking fireplace</p>
+          <p className="font-serif text-sm text-amber-200">Lifting the record from its sleeve…</p>
         </div>
         <Footer />
       </div>
@@ -307,177 +188,251 @@ export default function PlayRecordingPage() {
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="min-h-screen bg-[#0c0a09] text-stone-100 flex flex-col selection:bg-amber-600 selection:text-white"
-    >
+    <div className="flex min-h-screen flex-col bg-[#0c0a09] text-stone-100 selection:bg-amber-600 selection:text-white">
       <Navbar />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Cozy Header - Vintage Listening Room */}
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 border-b border-amber-900/30 pb-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="flex flex-col justify-between gap-4 border-b border-amber-900/30 pb-6 lg:flex-row lg:items-end">
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/60 border border-amber-600/30 text-amber-300 text-xs font-mono">
-                <Flame className="w-3.5 h-3.5 text-orange-400" />
-                <span>Cozy Vintage Room • Fireplace Lit</span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-950/60 px-3 py-1 font-mono text-xs text-amber-300">
+                <Disc3 className="h-3.5 w-3.5 text-amber-400" />
+                <span>3D Vinyl Player · 33⅓ RPM</span>
               </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-stone-700 text-stone-300 text-xs font-mono">
-                <Sofa className="w-3.5 h-3.5 text-amber-400" />
-                <span>Interactive 3D • Drag to Look Around</span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-900 px-3 py-1 font-mono text-xs text-stone-300">
+                <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                <span>Drag to orbit · scroll to zoom</span>
               </span>
               {isNeedleDropping && (
-                <span className="px-3 py-1 rounded-full bg-amber-600 text-stone-950 font-bold font-mono text-xs animate-pulse border border-amber-300">
-                  ● Needle Dropping...
+                <span className="animate-pulse rounded-full border border-amber-300 bg-amber-600 px-3 py-1 font-mono text-xs font-bold text-stone-950">
+                  ● needle dropping…
                 </span>
               )}
             </div>
             <div>
-              <h1 className="text-3xl sm:text-4xl font-serif font-bold text-stone-100 tracking-tight">
+              <h1 className="text-3xl font-serif font-bold tracking-tight text-stone-100 sm:text-4xl">
                 {recording.title}
               </h1>
-              <div className="flex items-center gap-3 mt-2 text-xs font-mono text-stone-400">
+              <div className="mt-2 flex flex-wrap items-center gap-3 font-mono text-xs text-stone-400">
                 <span className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  {recording.views} plays in this room
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                  {recording.views} plays
                 </span>
                 <span>•</span>
-                <span className="text-amber-300/80">{styleConfig.name} • {filterConfig.name}</span>
+                <span className="text-amber-300/80">
+                  {styleConfig.name} • {filterConfig.name}
+                </span>
+                {recording.duration_seconds ? (
+                  <>
+                    <span>•</span>
+                    <span>{formatTime(recording.duration_seconds)} master</span>
+                  </>
+                ) : null}
               </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={toggleFullscreen} leftIcon={isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}>
-              {isFullscreen ? 'Exit' : 'Cozy Fullscreen'}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => setShareModalOpen(true)} leftIcon={<Share2 className="w-4 h-4 text-amber-400" />}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShareModalOpen(true)}
+              leftIcon={<Share2 className="h-4 h-4 text-amber-400" />}
+            >
               Share Memory
             </Button>
             <Link href="/studio">
-              <Button variant="primary" size="sm" leftIcon={<Mic className="w-4 h-4 text-stone-950" />}>
+              <Button variant="primary" size="sm" leftIcon={<Mic className="h-4 w-4 text-stone-950" />}>
                 Record Yours
               </Button>
             </Link>
           </div>
         </div>
 
-        {/* Cozy Room + Parchment Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-          {/* Cozy 3D Room - 8 cols */}
-          <div className="lg:col-span-8 flex flex-col gap-4">
-            <div className="relative rounded-3xl overflow-hidden border border-amber-900/30 shadow-2xl bg-stone-950">
-              {/* Room info overlay top */}
-              <div className="absolute top-0 left-0 right-0 z-10 p-4 flex items-center justify-between pointer-events-none">
-                <div className="flex items-center gap-2">
-                  <span className="px-3 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-amber-500/30 text-amber-300 font-mono text-xs">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Music className="w-3 h-3" />
-                      {styleConfig.name}
-                    </span>
-                  </span>
-                  <span className="px-3 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-stone-700 text-stone-300 font-mono text-xs hidden sm:inline-flex">
-                    78 RPM Gramophone • Brass Horn
-                  </span>
-                </div>
-                <span className="px-3 py-1 rounded-full bg-stone-950/80 backdrop-blur-md border border-stone-800 text-stone-400 font-mono text-[11px]">
-                  Drag • Scroll to Zoom • Cozy Room
+        <div className="grid grid-cols-1 items-stretch gap-6 lg:grid-cols-12">
+          {/* Turntable + player */}
+          <div className="flex flex-col gap-4 lg:col-span-8">
+            <div className="relative overflow-hidden rounded-3xl border border-amber-900/30 shadow-2xl">
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-3">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-black/35 px-3 py-1 font-mono text-[11px] text-amber-100 backdrop-blur-sm">
+                  {styleConfig.name}
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/30 px-3 py-1 font-mono text-[11px] text-stone-200">
+                  {isLoading && !isPlaying
+                    ? 'buffering wax…'
+                    : !isReady
+                    ? 'loading…'
+                    : isPlaying
+                    ? 'playing'
+                    : 'ready'}
                 </span>
               </div>
 
-              {/* 3D Room */}
-              <Suspense fallback={<div className="h-[620px] flex items-center justify-center"><Disc3 className="w-10 h-10 text-amber-500 animate-spin" /></div>}>
-                <CozyGramophoneRoom
-                  isPlaying={isPlaying}
-                  isNeedleDropping={isNeedleDropping}
-                  vinylStyle={recording.vinyl_style}
-                  title={recording.title}
-                  recipientName={recording.recipient_name || undefined}
-                  senderName={recording.sender_name || undefined}
-                />
-              </Suspense>
+              <div className="h-[380px] w-full sm:h-[460px] lg:h-[520px]">
+                <Suspense fallback={<div className="h-full w-full bg-[#1c1917]" />}>
+                  <AnimeTurntablePlayer
+                    isPlaying={isPlaying}
+                    isNeedleDropping={isNeedleDropping}
+                    vinylStyle={recording.vinyl_style}
+                    title={recording.title}
+                    recipientName={recording.recipient_name || undefined}
+                    senderName={recording.sender_name || undefined}
+                  />
+                </Suspense>
+              </div>
 
-              {/* Cozy bottom vignette with controls */}
-              <div className="absolute bottom-0 left-0 right-0 z-10 p-4 bg-gradient-to-t from-stone-950/90 via-stone-950/50 to-transparent">
-                <div className="flex flex-col gap-3">
-                  {/* Progress */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={0}
-                        max={duration || 10}
-                        step={0.1}
-                        value={currentTime}
-                        onChange={handleSeek}
-                        className="flex-1 h-1.5 bg-stone-800/80 rounded-lg appearance-none cursor-pointer accent-amber-500 backdrop-blur-sm"
+              {/* Transport */}
+              <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-stone-950 via-stone-950/80 to-transparent p-4">
+                <div className="space-y-2">
+                  <div className="relative">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-600 transition-[width] duration-100"
+                        style={{ width: `${progress}%` }}
                       />
                     </div>
-                    <div className="flex justify-between items-center text-xs font-mono text-stone-400">
-                      <span className="text-amber-300 font-bold">{formatTime(currentTime)}</span>
-                      <span className="flex items-center gap-2">
-                        {isNeedleDropping && <span className="text-amber-300 animate-pulse">Lowering brass needle → {NEEDLE_DROP_DELAY_MS}ms to voice...</span>}
-                        <span>{formatTime(duration || recording.duration_seconds || 10)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={totalDuration || 10}
+                      step={0.1}
+                      value={Math.min(currentTime, totalDuration || 10)}
+                      onChange={(event) => seek(parseFloat(event.target.value))}
+                      aria-label="Seek within record"
+                      className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between font-mono text-xs text-stone-400">
+                    <span className="font-bold text-amber-300">{formatTime(currentTime)}</span>
+                    <span>{formatTime(totalDuration)}</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={toggle}
+                      disabled={!isReady && !isPlaying && !isNeedleDropping}
+                      title={
+                        isNeedleDropping
+                          ? 'Needle is falling — click to cancel'
+                          : isPlaying
+                          ? 'Pause'
+                          : 'Drop the needle'
+                      }
+                      className="flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-300/40 bg-gradient-to-br from-amber-400 to-amber-700 text-stone-950 shadow-xl shadow-amber-950/60 transition-all hover:scale-105 active:scale-95 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {isNeedleDropping || (isLoading && isPlaying) ? (
+                        <Disc3 className="h-6 w-6 animate-spin" />
+                      ) : isPlaying ? (
+                        <Pause className="h-6 w-6 fill-stone-950" />
+                      ) : (
+                        <Play className="ml-1 h-6 w-6 fill-stone-950" />
+                      )}
+                    </button>
+                    <button
+                      onClick={restart}
+                      title="Play again from the top"
+                      className="rounded-xl border border-stone-700 bg-stone-900/80 p-3 text-stone-300 transition-colors hover:text-amber-300"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                    </button>
+                    <div className="ml-1 hidden flex-col sm:flex">
+                      <span className="text-xs font-bold text-amber-100">
+                        {isNeedleDropping
+                          ? 'Arm lowering onto the wax…'
+                          : isPlaying
+                          ? 'Playing'
+                          : 'Ready when you are'}
+                      </span>
+                      <span className="font-mono text-[10px] text-stone-400">
+                        {isNeedleDropping
+                          ? 'voice fades in after the needle drop'
+                          : `${filterConfig.name} • ${styleConfig.name}`}
                       </span>
                     </div>
                   </div>
 
-                  {/* Play controls */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={togglePlay}
-                        className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-700 text-stone-950 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xl shadow-amber-950/60 border border-amber-300/40"
-                        title={isNeedleDropping ? 'Needle Dropping — Click to Cancel' : isPlaying ? 'Pause Gramophone' : 'Play on Gramophone'}
-                      >
-                        {isNeedleDropping ? <Disc3 className="w-6 h-6 animate-spin" /> : isPlaying ? <Pause className="w-6 h-6 fill-stone-950" /> : <Play className="w-6 h-6 fill-stone-950 ml-1" />}
-                      </button>
-                      <button
-                        onClick={handleRestart}
-                        className="p-3 rounded-xl bg-stone-900/80 backdrop-blur-md hover:bg-stone-800 text-stone-300 hover:text-amber-300 transition-colors border border-stone-700"
-                        title="Restart with Needle Drop"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                      </button>
-                      <div className="hidden sm:flex flex-col ml-1">
-                        <span className="text-xs font-serif font-bold text-amber-100">
-                          {isNeedleDropping ? 'Brass Horn Lowering...' : isPlaying ? 'Gramophone Playing' : 'Gramophone Ready'}
-                        </span>
-                        <span className="text-[10px] font-mono text-stone-400">
-                          {isNeedleDropping ? 'Authentic 1920s ritual' : `${filterConfig.name} • ${styleConfig.name}`}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 bg-stone-900/60 backdrop-blur-md px-3 py-2 rounded-xl border border-stone-800">
-                      <button onClick={toggleMute} className="text-stone-400 hover:text-amber-300 transition-colors">
-                        {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                      </button>
-                      <input type="range" min={0} max={1} step={0.05} value={isMuted ? 0 : volume} onChange={handleVolumeChange} className="w-20 sm:w-28 h-1.5 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-amber-500" />
-                    </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-stone-800 bg-stone-900/70 px-3 py-2">
+                    <button onClick={toggleMute} className="text-stone-400 transition-colors hover:text-amber-300">
+                      {isMuted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                    </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={isMuted ? 0 : volume}
+                      onChange={(event) => setVolume(parseFloat(event.target.value))}
+                      aria-label="Volume"
+                      className="h-1.5 w-20 cursor-pointer appearance-none rounded-lg bg-stone-800 accent-amber-500 sm:w-28"
+                    />
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Cozy room description */}
-            <div className="p-4 rounded-2xl bg-stone-900/60 border border-amber-900/20 flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-amber-950/50 border border-amber-700/30 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <Sparkles className="w-4 h-4 text-amber-400" />
+            {/* Status / help strip */}
+            {playerError ? (
+              <div className="flex items-start gap-3 rounded-2xl border border-red-800/50 bg-red-950/40 p-4">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-300" />
+                <div className="space-y-2">
+                  <p className="text-sm font-serif text-red-100">{playerError}</p>
+                  <p className="text-xs leading-relaxed text-red-200/70">
+                    The mastered file for this record is{' '}
+                    <code className="rounded bg-black/40 px-1 font-mono text-[11px]">
+                      {recording.processed_audio_url?.slice(0, 46)}
+                      {recording.processed_audio_url?.length > 46 ? '…' : ''}
+                    </code>
+                    . If it was pressed before this deploy the audio may have left the temp disk —
+                    re-press the record from the studio to make a permanent copy.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => player.play(currentTime)}>
+                      Try again
+                    </Button>
+                    <a href={recording.processed_audio_url} download={`${recording.slug || 'vynyl'}.mp3`}>
+                      <Button variant="outline" size="sm" leftIcon={<Download className="h-4 w-4" />}>
+                        Download instead
+                      </Button>
+                    </a>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1">
-                <p className="text-sm font-serif text-stone-200">
-                  Welcome to the <span className="text-amber-300 font-bold">Cozy Vintage Listening Room</span> — a warm 1920s study with crackling fireplace, Persian rug, and a fully interactive brass gramophone.
-                </p>
-                <p className="text-xs text-stone-400 leading-relaxed">
-                  Drag to look around, scroll to zoom, click the big amber button to lower the brass needle. Every playback includes authentic needle-drop SFX, a dramatic {NEEDLE_DROP_DELAY_MS}ms pause, then your voice with vintage crackle and background atmosphere baked in — same every time.
-                </p>
+            ) : (
+              <div className="flex items-start gap-3 rounded-2xl border border-amber-900/20 bg-stone-900/60 p-4">
+                <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-amber-700/30 bg-amber-950/50">
+                  <Sparkles className="h-4 w-4 text-amber-400" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-serif text-stone-200">
+                    Pressed once, played the same way every time — voice, tube filter, background
+                    music and crackle are all mixed into this MP3.
+                  </p>
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-relaxed text-stone-400">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-stone-700 bg-stone-950/60 px-2 py-0.5 font-mono">
+                      <Keyboard className="h-3 w-3" /> space plays
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-stone-700 bg-stone-950/60 px-2 py-0.5 font-mono">
+                      ← → skip 5s
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-stone-700 bg-stone-950/60 px-2 py-0.5 font-mono">
+                      m mutes
+                    </span>
+                    <span>
+                      {showKeyboardHint && !isPlaying
+                        ? ' — or click the amber button to drop the needle.'
+                        : '.'}
+                    </span>
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Parchment Lyrics - 4 cols */}
-          <div className="lg:col-span-4 flex flex-col min-h-[520px]">
+          {/* Lyrics */}
+          <div className="flex min-h-[420px] flex-col lg:col-span-4">
             <ParchmentLyricCard
               transcript={recording.transcript_json || []}
               currentTime={currentTime}
@@ -491,134 +446,70 @@ export default function PlayRecordingPage() {
         </div>
       </main>
 
-      {/* Fullscreen Immersive Listening Room - appears when playing */}
-      {isListeningFullscreen && (
-        <div className="fixed inset-0 z-[100] bg-[#0c0a09] flex flex-col animate-in fade-in duration-500">
-          {/* Top bar */}
-          <div className="absolute top-0 left-0 right-0 z-20 p-4 flex items-center justify-between bg-gradient-to-b from-stone-950/90 to-transparent">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-amber-600 flex items-center justify-center shadow-xl">
-                <Music className="w-5 h-5 text-stone-950" />
-              </div>
-              <div>
-                <p className="text-sm font-serif font-bold text-amber-100">{recording.title}</p>
-                <p className="text-xs font-mono text-stone-400">
-                  {isNeedleDropping ? '● Needle Dropping • Brass horn lowering...' : isPlaying ? '● Live in Cozy Room • Gramophone Playing' : 'Paused'}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="hidden sm:inline-flex px-3 py-1 rounded-full bg-stone-900/80 border border-amber-500/30 text-amber-300 font-mono text-xs">
-                Fullscreen Listening Room • Fireplace + Brass Horn
-              </span>
-              <Button variant="outline" size="sm" onClick={() => setIsListeningFullscreen(false)} leftIcon={<Minimize2 className="w-4 h-4" />}>
-                Exit Fullscreen
-              </Button>
-            </div>
-          </div>
+      {/* Playback elements are owned by useVinylPlayer (src is set by the hook). */}
+      <audio ref={player.audioRef} preload="auto" className="hidden" />
+      <audio ref={player.needleRef} src="/audio/needle-drop.mp3" preload="auto" className="hidden" />
 
-          {/* Fullscreen Room */}
-          <div className="flex-1 w-full h-full relative">
-            <CozyGramophoneRoom
-              isPlaying={isPlaying}
-              isNeedleDropping={isNeedleDropping}
-              vinylStyle={recording.vinyl_style}
-              title={recording.title}
-              recipientName={recording.recipient_name || undefined}
-              senderName={recording.sender_name || undefined}
-            />
-
-            {/* Bottom controls */}
-            <div className="absolute bottom-0 left-0 right-0 z-20 p-6 bg-gradient-to-t from-stone-950 via-stone-950/80 to-transparent">
-              <div className="max-w-5xl mx-auto space-y-4">
-                <div className="space-y-2">
-                  <input
-                    type="range"
-                    min={0}
-                    max={duration || 10}
-                    step={0.1}
-                    value={currentTime}
-                    onChange={handleSeek}
-                    className="w-full h-2 bg-stone-800/80 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                  />
-                  <div className="flex justify-between text-xs font-mono text-stone-400">
-                    <span className="text-amber-300 font-bold text-sm">{formatTime(currentTime)}</span>
-                    <span className="text-sm">{formatTime(duration || recording.duration_seconds || 10)}</span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <button
-                      onClick={togglePlay}
-                      className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-700 text-stone-950 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-2xl shadow-amber-950/70 border border-amber-300/50"
-                    >
-                      {isNeedleDropping ? <Disc3 className="w-7 h-7 animate-spin" /> : isPlaying ? <Pause className="w-7 h-7 fill-stone-950" /> : <Play className="w-7 h-7 fill-stone-950 ml-1" />}
-                    </button>
-                    <button onClick={handleRestart} className="p-3.5 rounded-xl bg-stone-900/80 hover:bg-stone-800 text-stone-300 border border-stone-700">
-                      <RotateCcw className="w-5 h-5" />
-                    </button>
-                    <div className="hidden sm:block">
-                      <p className="text-sm font-serif font-bold text-amber-100">
-                        {isNeedleDropping ? 'Lowering brass needle onto wax...' : isPlaying ? 'Gramophone playing in cozy room' : 'Paused in listening room'}
-                      </p>
-                      <p className="text-xs font-mono text-stone-400">{styleConfig.name} • {filterConfig.name} • BG + crackle baked in</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 bg-stone-900/70 backdrop-blur-md px-4 py-2.5 rounded-xl border border-stone-700">
-                    <button onClick={toggleMute} className="text-stone-400 hover:text-amber-300">
-                      {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                    </button>
-                    <input type="range" min={0} max={1} step={0.05} value={isMuted ? 0 : volume} onChange={handleVolumeChange} className="w-28 h-1.5 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-amber-500" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Hidden Audio - main is identical every time (BG + crackle baked), needle drop separate */}
-      <audio
-        ref={audioRef}
-        src={recording.processed_audio_url}
-        preload="auto"
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onEnded={() => {
-          clearNeedleDropTimeout();
-          setIsPlaying(false);
-          setIsNeedleDropping(false);
-        }}
-        className="hidden"
-      />
-      <audio ref={needleDropAudioRef} src="/audio/needle-drop.mp3" preload="auto" className="hidden" />
-
-      <Modal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} title="Share from the Listening Room" subtitle="Send this cozy gramophone link" maxWidth="md">
+      <Modal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        title="Share this record"
+        subtitle="Send the link — it plays on phones and laptops alike"
+        maxWidth="md"
+      >
         <div className="space-y-6 pt-2">
           <div className="space-y-2">
-            <label className="text-xs font-mono text-stone-400 block">Permanent Gramophone Room Link</label>
+            <label className="block font-mono text-xs text-stone-400">Permanent record link</label>
             <div className="flex items-center gap-2">
-              <input type="text" readOnly value={typeof window !== 'undefined' ? window.location.href : ''} className="w-full bg-stone-950 border border-stone-700 rounded-xl px-3 py-2 text-xs font-mono text-amber-200" />
-              <Button variant="primary" size="sm" onClick={handleCopyLink} leftIcon={copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}>
+              <input
+                type="text"
+                readOnly
+                value={typeof window !== 'undefined' ? window.location.href : ''}
+                className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 font-mono text-xs text-amber-200"
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleCopyLink}
+                leftIcon={copiedLink ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              >
                 {copiedLink ? 'Copied' : 'Copy'}
               </Button>
             </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
-            <a href={`https://wa.me/?text=${encodeURIComponent(`Listen to this vintage gramophone message in a cozy room: ${typeof window !== 'undefined' ? window.location.href : ''}`)}`} target="_blank" rel="noopener noreferrer" className="p-3 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center gap-2 text-xs font-medium text-stone-200">
+            <a
+              href={`https://wa.me/?text=${encodeURIComponent(
+                `A voice pressed to vinyl for you: ${typeof window !== 'undefined' ? window.location.href : ''}`
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 rounded-xl border border-stone-700 bg-stone-800 p-3 text-xs font-medium text-stone-200 hover:bg-stone-700"
+            >
               <span>WhatsApp</span>
             </a>
-            <a href={`mailto:?subject=${encodeURIComponent(`A gramophone note: ${recording.title}`)}&body=${encodeURIComponent(`I preserved a voice note in a cozy vintage room for you:\n\n${typeof window !== 'undefined' ? window.location.href : ''}`)}`} className="p-3 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center gap-2 text-xs font-medium text-stone-200">
+            <a
+              href={`mailto:?subject=${encodeURIComponent(`A vinyl voice note: ${recording.title}`)}&body=${encodeURIComponent(
+                `I pressed a voice note for you:\n\n${typeof window !== 'undefined' ? window.location.href : ''}`
+              )}`}
+              className="flex items-center justify-center gap-2 rounded-xl border border-stone-700 bg-stone-800 p-3 text-xs font-medium text-stone-200 hover:bg-stone-700"
+            >
               <span>Email</span>
             </a>
           </div>
-          <div className="pt-4 border-t border-stone-800 flex items-center justify-between">
+
+          <div className="flex items-center justify-between border-t border-stone-800 pt-4">
             <div>
-              <p className="text-xs font-serif font-bold text-stone-200">Master Audio File</p>
-              <p className="text-[10px] text-stone-400 font-mono">192kbps with BG + crackle baked in</p>
+              <p className="text-xs font-serif font-bold text-stone-200">Mastered audio</p>
+              <p className="font-mono text-[10px] text-stone-400">
+                192 kbps MP3 • voice + {filterConfig.name} + ambience
+              </p>
             </div>
-            <a href={recording.processed_audio_url} download={`${recording.slug}.mp3`}>
-              <Button variant="outline" size="sm" leftIcon={<Download className="w-4 h-4 text-amber-400" />}>Download MP3</Button>
+            <a href={recording.processed_audio_url} download={`${recording.slug || 'vynyl'}.mp3`}>
+              <Button variant="outline" size="sm" leftIcon={<Download className="h-4 w-4 text-amber-400" />}>
+                Download MP3
+              </Button>
             </a>
           </div>
         </div>
