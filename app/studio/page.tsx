@@ -248,7 +248,7 @@ function StudioContent() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/60 border border-amber-600/30 text-amber-300 text-xs font-mono">
               <Music2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>Studio · 3D Anime Turntable</span>
+              <span>Studio · Realistic 3D Turntable</span>
             </span>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-stone-700 text-stone-300 text-xs font-mono">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />

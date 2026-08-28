@@ -23,7 +23,7 @@ import {
   Home
 } from 'lucide-react';
 
-// 3D anime turntable hero — client-only (WebGL), the single canvas of the page.
+// 3D turntable hero — client-only (WebGL), the single canvas of the page.
 const AnimeTurntablePlayer = dynamic(
   () => import('@/components/3d/AnimeTurntablePlayer').then((m) => m.AnimeTurntablePlayer),
   {
@@ -54,7 +54,7 @@ export default async function HomePage() {
     <div className="min-h-screen bg-[#0c0a09] text-stone-100 flex flex-col selection:bg-amber-600 selection:text-white">
       <Navbar />
 
-      {/* Hero Section - 3D anime turntable */}
+      {/* Hero Section - 3D turntable */}
       <section className="relative w-full pt-6 pb-16 lg:pt-12 lg:pb-24 overflow-hidden">
         {/* Warm background wash — gradients instead of blurred layers: no
             120px backdrop blurs to repaint while scrolling. */}
@@ -73,7 +73,7 @@ export default async function HomePage() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/70 border border-amber-500/40 text-amber-300 text-xs font-mono uppercase tracking-wider">
                   <Disc3 className="w-3.5 h-3.5 text-amber-400" />
-                  <span>3D Anime Turntable</span>
+                  <span>3D Turntable</span>
                 </span>
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-amber-900/30 text-stone-300 text-xs font-mono uppercase tracking-wider">
                   <Music className="w-3.5 h-3.5 text-amber-400" />
@@ -167,7 +167,7 @@ export default async function HomePage() {
                     Interactive • drag to orbit
                   </span>
                   <span className="px-2.5 py-1 rounded-full border border-white/15 bg-black/30 text-[10px] font-mono text-stone-200">
-                    33⅓ rpm • cel-shaded
+                    33⅓ rpm • realistic 3D
                   </span>
                 </div>
 
