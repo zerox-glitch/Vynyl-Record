@@ -1165,7 +1165,7 @@ export function TurntablePlayer({
       {/* Minimal status chrome */}
       <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
         <span className="rounded-full border border-white/15 bg-black/45 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-100">
-          {spinning ? (isNeedleDropping ? 'cueing the stylus…' : '33⅓ rpm · playing') : 'at rest · drag to orbit'}
+          {spinning ? (isNeedleDropping ? 'the needle lands…' : 'now playing') : 'drag to find your angle'}
         </span>
         {isRecording && (
           <span className="flex items-center gap-1.5 rounded-full border border-red-300/40 bg-red-600/85 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-white">

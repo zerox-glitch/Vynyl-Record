@@ -21,9 +21,9 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
 
 -- Default CMS Seed Data
 INSERT INTO public.site_settings (key, value) VALUES
-('hero_copy', '{"headline": "Preserve Your Voice in Digital Wax", "subheadline": "Send a timeless, crackling 3D vinyl message to someone you love. A gift they will listen to forever.", "cta_text": "Record Your Memory Now"}'),
+('hero_copy', '{"headline": "A voice they can return to.", "subheadline": "Press a few seconds of the people you love into a warm vinyl record. The needle drops, the wax turns, and your words come through the room.", "cta_text": "Press Your Voice"}'),
 ('branding_theme', '{"primary_color": "#d97706", "bg_color": "#0c0a09", "accent_color": "#78350f", "font_heading": "Playfair Display", "enable_grain_overlay": true}'),
-('faqs', '[{"q": "How does the recipient listen to my vinyl note?", "a": "They simply open your custom link on any browser. A gorgeous 3D vintage turntable appears, places the needle on the wax, and plays your crackling voice with synced scrolling parchment lyrics."}, {"q": "Can I download the mastered audio?", "a": "Yes! Every vinyl record includes a high-definition 192kbps MP3 download with authentic gramophone warmth and crackle mixed in."}, {"q": "How long do memories stay active?", "a": "Forever. Your digital wax records are permanently preserved on our cloud infrastructure."}]')
+('faqs', '[{"q": "How do they hear it?", "a": "You send them a single link. They open it in any browser. A 3D turntable appears, the needle lands on the wax, and your voice starts playing — no app, no account, nothing to download."}, {"q": "Can they keep it?", "a": "Yes. The recording has a download button beneath the turntable, so they can save the audio forever. The link itself never expires either."}, {"q": "How long should it be?", "a": "A few seconds is plenty. The best ones rarely are. A sentence you can''t quite say out loud is usually exactly enough."}, {"q": "What if I don''t like the sound of my voice?", "a": "You won''t. Nobody does. The vintage warmth takes the edge off, and what comes through is closer to how the people who love you already hear you."}]')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- 3. DYNAMIC PRICING PLANS (Admin-Managed)
