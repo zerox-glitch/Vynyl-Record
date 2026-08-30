@@ -18,8 +18,8 @@ interface UploadIntentPayload {
 }
 
 function secret(): string {
-  const value = process.env.R2_UPLOAD_SECRET || '';
-  if (!value) throw new Error('R2_UPLOAD_SECRET must be configured for upload intents.');
+  const value = process.env.R2_UPLOAD_SECRET || process.env.ADMIN_SESSION_SECRET || '';
+  if (!value) throw new Error('R2_UPLOAD_SECRET or ADMIN_SESSION_SECRET must be configured for upload intents.');
   return value;
 }
 
