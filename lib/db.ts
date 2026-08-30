@@ -438,14 +438,16 @@ export async function getRecordingBySlug(slug: string, viewer: Viewer = { kind: 
 }
 
 export async function getRecordingForAudioFilename(filename: string): Promise<Pick<Recording, 'id' | 'visibility' | 'processed_audio_url' | 'raw_voice_url'> | null> {
-  const needle = filename.split('?')[0];
+  const needle = path.basename(filename.split('?')[0]).replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!needle) return null;
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
+      const urls = [`/api/records/${needle}`, `/records/${needle}`, `/audio/${needle}`];
       const { data } = await supabase
         .from('recordings')
         .select('id, visibility, processed_audio_url, raw_voice_url')
-        .or(`processed_audio_url.ilike.%${needle}%,raw_voice_url.ilike.%${needle}%`)
+        .or(urls.flatMap((url) => [`processed_audio_url.eq.${url}`, `raw_voice_url.eq.${url}`]).join(','))
         .limit(1)
         .maybeSingle();
       return (data as any) || null;
