@@ -18,7 +18,7 @@ export async function PUT(req: NextRequest) {
     const filename = path.basename(key);
     const target = path.join(tmpAssetDir(), `upload-${filename}`);
     await fs.writeFile(target, data);
-    return NextResponse.json({ success: true, key, url: `/api/records/${filename}` });
+    return NextResponse.json({ success: true, key, url: `/api/records/${path.basename(target)}` });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Upload rejected.' }, { status: 403 });
   }
