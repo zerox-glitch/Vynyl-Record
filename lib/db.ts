@@ -24,6 +24,8 @@ interface LocalStore {
   audioAssets: AudioAsset[];
   profiles: Profile[];
   integrationSettings: IntegrationSettings;
+  /** Optional. Added by lib/processing/queue.ts when the local fallback is alive. */
+  processingJobs?: import('@/types').ProcessingJob[];
 }
 
 // Serverless writable directory: use os.tmpdir() to prevent EROFS errors on Vercel
@@ -98,7 +100,7 @@ function setMemoryStore(store: LocalStore) {
   globalObj.__vynylLocalStore = store;
 }
 
-function readLocalStore(): LocalStore {
+function readLocalStoreRaw(): LocalStore {
   const memStore = getMemoryStore();
 
   try {
@@ -126,7 +128,7 @@ function readLocalStore(): LocalStore {
   return memStore;
 }
 
-function writeLocalStore(store: LocalStore) {
+function writeLocalStoreRaw(store: LocalStore) {
   // Always update in-memory store first
   setMemoryStore(store);
 
@@ -137,6 +139,33 @@ function writeLocalStore(store: LocalStore) {
   } catch (err) {
     console.warn('[DB] Local store tmp write note:', err);
   }
+}
+
+/**
+ * Typed in-file accessors. Caller modules still get `patchLocalStore`
+ * (below) to extend the store with keys that aren't part of LocalStore.
+ */
+function readLocalStore(): LocalStore {
+  return readLocalStoreRaw();
+}
+function writeLocalStore(store: LocalStore): void {
+  writeLocalStoreRaw(store);
+}
+
+/**
+ * Patch the local fallback blob in place. Sibling modules (notably the
+ * processing queue) use this to extend the in-process store without having
+ * to import every new field into the strict LocalStore type. Real
+ * production calls go through Supabase.
+ */
+export function patchLocalStore<K extends string>(
+  key: K,
+  mutator: (current: any | undefined) => any
+): void {
+  const store = readLocalStoreRaw() as any;
+  const next = mutator(store[key]);
+  store[key] = next;
+  writeLocalStoreRaw(store);
 }
 
 // 1. SITE SETTINGS
@@ -319,6 +348,35 @@ export async function deleteAudioAsset(id: string): Promise<boolean> {
 }
 
 // 4. RECORDINGS
+//
+// Visibility model:
+//   'public'   — anyone (including anonymous) can find + view.
+//   'unlisted' — only people with the slug URL can view (current
+//                default; matches the old behaviour that everything
+//                was shareable via link).
+//   'private'  — owner OR admin can view; everyone else gets 404.
+//
+// `viewer` is passed in so the same helper powers both the public
+// share API and the dashboard listing API.
+export type Viewer =
+  | { kind: 'anonymous' }
+  | { kind: 'admin' }
+  | { kind: 'user'; userId: string };
+
+const VISIBLE_TO_VIEWER = (rec: Recording, viewer: Viewer): boolean => {
+  const v = rec.visibility ?? 'unlisted';
+  if (v === 'public' || v === 'unlisted') return true;
+  if (v === 'private') {
+    if (viewer.kind === 'admin') return true;
+    if (viewer.kind === 'user' && rec.user_id && rec.user_id === viewer.userId) return true;
+  }
+  return false;
+};
+
+function applyVisibilityFilter(rows: Recording[], viewer: Viewer): Recording[] {
+  return rows.filter((r) => VISIBLE_TO_VIEWER(r, viewer));
+}
+
 export async function getRecordings(): Promise<Recording[]> {
   if (isSupabaseServerConfigured()) {
     try {
@@ -331,15 +389,35 @@ export async function getRecordings(): Promise<Recording[]> {
   }
 
   const store = readLocalStore();
+  // Admin-style call: returns everything, including private.
   return store.recordings;
 }
 
-export async function getRecordingBySlug(slug: string): Promise<Recording | null> {
+export async function getRecordingsForViewer(viewer: Viewer): Promise<Recording[]> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data } = await supabase.from('recordings').select('*').order('created_at', { ascending: false });
+      if (data && data.length > 0) {
+        return applyVisibilityFilter(data as Recording[], viewer);
+      }
+    } catch (err) {
+      console.warn('Supabase recordings fallback:', err);
+    }
+  }
+  const store = readLocalStore();
+  return applyVisibilityFilter(store.recordings, viewer);
+}
+
+export async function getRecordingBySlug(slug: string, viewer: Viewer = { kind: 'anonymous' }): Promise<Recording | null> {
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
       const { data } = await supabase.from('recordings').select('*').eq('slug', slug).single();
-      if (data) return data as Recording;
+      if (data) {
+        const rec = data as Recording;
+        return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
+      }
     } catch (err) {
       console.warn('Supabase getRecordingBySlug fallback:', err);
     }
@@ -347,7 +425,8 @@ export async function getRecordingBySlug(slug: string): Promise<Recording | null
 
   const store = readLocalStore();
   const rec = store.recordings.find((r) => r.slug.toLowerCase() === slug.toLowerCase());
-  return rec || null;
+  if (!rec) return null;
+  return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
 }
 
 export async function saveRecording(recording: Recording): Promise<Recording> {

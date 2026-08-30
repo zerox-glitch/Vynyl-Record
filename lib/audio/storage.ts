@@ -273,3 +273,43 @@ function nodeStreamToWeb(source: fs.ReadStream) {
     },
   });
 }
+
+/**
+ * Fetch any URL (local route handler, data: URI, or R2 presigned URL) and
+ * drop it on disk under os.tmpdir() so FFmpeg can stream-read it without
+ * pulling the whole file into memory. Returns the local path.
+ */
+export async function downloadToTmp(url: string, prefix: string): Promise<string> {
+  if (!url) throw new Error('downloadToTmp: empty url');
+  const dir = path.join(os.tmpdir(), 'vynyl_wf_in');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  const extMatch = url.match(/^\s*data:[^;]+;base64,/) && !url.startsWith('http');
+  let ext = '.bin';
+  if (url.toLowerCase().includes('.mp3')) ext = '.mp3';
+  else if (url.toLowerCase().includes('.m4a')) ext = '.m4a';
+  else if (url.toLowerCase().includes('.webm')) ext = '.webm';
+  else if (url.toLowerCase().includes('.wav')) ext = '.wav';
+  else if (extMatch) ext = '.bin';
+  const target = path.join(dir, `${prefix}-${Date.now()}${ext}`);
+  if (url.startsWith('data:')) {
+    const b64 = url.split(',', 2)[1] || '';
+    const buf = Buffer.from(b64, 'base64');
+    fs.writeFileSync(target, buf);
+    return target;
+  }
+  if (url.startsWith('/api/records/') || url.startsWith('/audio/')) {
+    // Local path — let resolveRecordFile find it.
+    const filename = path.basename(url);
+    const resolved = resolveRecordFile(filename);
+    if (resolved) {
+      fs.copyFileSync(resolved, target);
+      return target;
+    }
+  }
+  // Otherwise treat as a remote (R2 presign or any pre-signed URL) URL.
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`downloadToTmp: ${res.status} ${res.statusText}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(target, buf);
+  return target;
+}

@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: { slug: string } }
 ) {
   try {
-    const recording = await getRecordingBySlug(params.slug);
+    const recording = await getRecordingBySlug(params.slug, { kind: 'anonymous' });
     if (!recording) {
       return NextResponse.json({ error: 'Vinyl recording not found.' }, { status: 404 });
     }
