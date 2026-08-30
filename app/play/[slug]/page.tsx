@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-// 3D anime turntable — SSR unsafe, and only mounted once per page.
+// 3D turntable — SSR unsafe, and only mounted once per page.
 const AnimeTurntablePlayer = dynamic(
   () => import('@/components/3d/AnimeTurntablePlayer').then((m) => m.AnimeTurntablePlayer),
   {
