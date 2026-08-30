@@ -18,6 +18,17 @@ async function drain(req: NextRequest) {
   if (!expected || (headerSecret !== expected && bearer !== expected)) {
     return NextResponse.json({ error: 'Worker authentication required.' }, { status: 401 });
   }
+  // Never let a normal Vercel function run a long FFmpeg job by accident.
+  // Set this only for local development or a deliberately provisioned
+  // long-duration Node host. Railway/Fly workers should call runOneJob()
+  // directly using the same ProcessingWorker interface.
+  if (process.env.ALLOW_INLINE_FFMPEG !== 'true') {
+    return NextResponse.json({
+      queued: true,
+      externalWorkerRequired: true,
+      message: 'Jobs are queued. Run the replaceable worker on a persistent Node host.',
+    }, { status: 202 });
+  }
   try {
     const result = await runOneJob();
     return NextResponse.json(result);

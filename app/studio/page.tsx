@@ -58,6 +58,10 @@ function StudioContent() {
   const [title, setTitle] = useState<string>('My Heartfelt Voice Note');
   const [recipientName, setRecipientName] = useState<string>('');
   const [occasion, setOccasion] = useState<OccasionType>('something_else');
+  const [dedication, setDedication] = useState('');
+  const [occasionDate, setOccasionDate] = useState('');
+  const [sideALabel, setSideALabel] = useState('Side A · Your voice');
+  const [sideBLabel, setSideBLabel] = useState('Side B · The rest of the story');
   const [senderName, setSenderName] = useState<string>('');
 
   // Audio & Vinyl Settings
@@ -228,7 +232,10 @@ function StudioContent() {
           vinylStyle,
           maxSeconds: maxDuration + 5,
           durationSeconds: recordedDuration,
-          dedication: title.trim(),
+          dedication: dedication.trim(),
+          occasionDate,
+          sideALabel: sideALabel.trim(),
+          sideBLabel: sideBLabel.trim(),
         }),
       });
       const queued = await queueRes.json();
@@ -411,6 +418,26 @@ function StudioContent() {
                   placeholder="e.g. Our 50th Anniversary Letter"
                   className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Dedication (optional)</label>
+                <textarea value={dedication} onChange={(e) => setDedication(e.target.value)} rows={2} maxLength={1000} placeholder="A line they can read before the needle drops…" className="w-full resize-none rounded-xl border border-stone-700 bg-stone-950 px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500" />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Date</label>
+                  <input type="date" value={occasionDate} onChange={(e) => setOccasionDate(e.target.value)} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side A label</label>
+                  <input value={sideALabel} onChange={(e) => setSideALabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side B label</label>
+                  <input value={sideBLabel} onChange={(e) => setSideBLabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
