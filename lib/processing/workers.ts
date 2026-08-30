@@ -43,6 +43,7 @@ export const audioMasterWorker: ProcessingWorker = {
       voiceFileUrl?: string;
       bgMusicFilePath?: string | null;
       crackleFilePath?: string | null;
+      originalStorageKey?: string | null;
       filterPreset?: string;
       vinylStyle?: string;
       crackleIntensity?: number;
@@ -57,7 +58,12 @@ export const audioMasterWorker: ProcessingWorker = {
     update({ result: { stage: 'fetching_sources' } });
 
     // Pull the input bytes onto disk so FFmpeg can stream the file.
-    const source = await downloadToTmp(params.voiceFileUrl, `${job.id}-source`);
+    let sourceUrl = params.voiceFileUrl || '';
+    if (!sourceUrl && params.originalStorageKey && getStorage().isR2Configured) {
+      sourceUrl = (await getStorage().signedDownloadUrl(params.originalStorageKey, 900)).url;
+    }
+    if (!sourceUrl) throw new Error('audio_master job has no source URL. Configure R2 or send a local upload URL.');
+    const source = await downloadToTmp(sourceUrl, `${job.id}-source`);
 
     await updateRecordingProcessing(job.recording_id, {
       processing_state: 'processing',
