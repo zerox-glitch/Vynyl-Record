@@ -104,7 +104,10 @@ export async function claimNext(input: {
       const { data } = await query.maybeSingle();
       if (!data) return null;
       const claimed = { ...(data as ProcessingJob), state: 'processing' as const, started_at: now, attempts: (data as any).attempts + 1, last_heartbeat_at: now };
-      const { error } = await supabase
+      // Optimistic lock: only the worker that still sees `state=queued`
+      // can win the claim. A second worker may select the same row, but its
+      // conditional update returns no row and it must not process the job.
+      const { data: won, error } = await supabase
         .from('processing_jobs')
         .update({
           state: claimed.state,
@@ -112,9 +115,12 @@ export async function claimNext(input: {
           attempts: claimed.attempts,
           last_heartbeat_at: claimed.last_heartbeat_at,
         })
-        .eq('id', claimed.id);
-      if (error) return null;
-      return claimed;
+        .eq('id', claimed.id)
+        .eq('state', 'queued')
+        .select('*')
+        .maybeSingle();
+      if (error || !won) return null;
+      return won as ProcessingJob;
     } catch { return null; }
   }
   const s = jobsStore();
