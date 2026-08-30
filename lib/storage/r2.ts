@@ -68,7 +68,8 @@ export type StorageOperations = {
     ttlSeconds?: number
   ) => Promise<UploadUrl>;
   signedDownloadUrl: (key: string, ttlSeconds?: number) => Promise<DownloadUrl>;
-  publicUrl: (key: string) => string;
+  /** Pre-signed URL for short-lived GET. Pure local-FS impl returns a stable path. */
+  publicUrl: (key: string) => Promise<string>;
   isR2Configured: boolean;
 };
 
@@ -223,11 +224,11 @@ function buildR2Storage(): StorageOperations {
   return {
     isR2Configured: true,
 
-    publicUrl(key: string): string {
+    async publicUrl(key: string): Promise<string> {
       if (publicBase) return `${publicBase}/${key}`;
       // Public bucket access requires R2_PUBLIC_BASE; private-by-default is
-      // safer for personal recordings.
-      return presignR2({
+      // safer for personal recordings. We presign on demand.
+      return await presignR2({
         method: 'GET',
         bucket,
         accountId,
@@ -269,7 +270,7 @@ function buildR2Storage(): StorageOperations {
     },
 
     async getObject(key): Promise<ObjectBody | null> {
-      const url = presignR2({
+      const url = await presignR2({
         method: 'GET',
         bucket,
         accountId,
@@ -341,7 +342,7 @@ function buildLocalStorage(): StorageOperations {
   try { if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true }); } catch {}
   return {
     isR2Configured: false,
-    publicUrl(key) {
+    async publicUrl(key) {
       return `/api/records/${key.split('/').pop()}`;
     },
     async putObject(key, body, _contentType): Promise<ObjectRef> {

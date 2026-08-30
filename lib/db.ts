@@ -24,6 +24,8 @@ interface LocalStore {
   audioAssets: AudioAsset[];
   profiles: Profile[];
   integrationSettings: IntegrationSettings;
+  /** Optional. Added by lib/processing/queue.ts when the local fallback is alive. */
+  processingJobs?: import('@/types').ProcessingJob[];
 }
 
 // Serverless writable directory: use os.tmpdir() to prevent EROFS errors on Vercel
@@ -98,7 +100,7 @@ function setMemoryStore(store: LocalStore) {
   globalObj.__vynylLocalStore = store;
 }
 
-function readLocalStore(): LocalStore {
+function readLocalStoreRaw(): LocalStore {
   const memStore = getMemoryStore();
 
   try {
@@ -126,7 +128,7 @@ function readLocalStore(): LocalStore {
   return memStore;
 }
 
-function writeLocalStore(store: LocalStore) {
+function writeLocalStoreRaw(store: LocalStore) {
   // Always update in-memory store first
   setMemoryStore(store);
 
@@ -137,6 +139,33 @@ function writeLocalStore(store: LocalStore) {
   } catch (err) {
     console.warn('[DB] Local store tmp write note:', err);
   }
+}
+
+/**
+ * Typed in-file accessors. Caller modules still get `patchLocalStore`
+ * (below) to extend the store with keys that aren't part of LocalStore.
+ */
+function readLocalStore(): LocalStore {
+  return readLocalStoreRaw();
+}
+function writeLocalStore(store: LocalStore): void {
+  writeLocalStoreRaw(store);
+}
+
+/**
+ * Patch the local fallback blob in place. Sibling modules (notably the
+ * processing queue) use this to extend the in-process store without having
+ * to import every new field into the strict LocalStore type. Real
+ * production calls go through Supabase.
+ */
+export function patchLocalStore<K extends string>(
+  key: K,
+  mutator: (current: any | undefined) => any
+): void {
+  const store = readLocalStoreRaw() as any;
+  const next = mutator(store[key]);
+  store[key] = next;
+  writeLocalStoreRaw(store);
 }
 
 // 1. SITE SETTINGS
