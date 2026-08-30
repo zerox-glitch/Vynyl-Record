@@ -15,10 +15,12 @@ import { LatheProcessingModal } from '@/components/studio/LatheProcessingModal';
 import { StripeUpgradeModal } from '@/components/studio/StripeUpgradeModal';
 import { Button } from '@/components/ui/Button';
 import { 
-  FilterPresetType, 
-  VinylStyleType, 
-  AudioAsset, 
-  PricingPlan 
+  FilterPresetType,
+  VinylStyleType,
+  AudioAsset,
+  PricingPlan,
+  OccasionType,
+  OCCASIONS,
 } from '@/types';
 import { 
   DEFAULT_AUDIO_ASSETS, 
@@ -55,6 +57,7 @@ function StudioContent() {
   // Metadata
   const [title, setTitle] = useState<string>('My Heartfelt Voice Note');
   const [recipientName, setRecipientName] = useState<string>('');
+  const [occasion, setOccasion] = useState<OccasionType>('something_else');
   const [senderName, setSenderName] = useState<string>('');
 
   // Audio & Vinyl Settings
@@ -177,6 +180,7 @@ function StudioContent() {
       formData.append('title', title.trim());
       formData.append('recipientName', recipientName.trim());
       formData.append('senderName', senderName.trim());
+      formData.append('occasion', occasion);
       formData.append('filterPreset', filterPreset);
       formData.append('crackleIntensity', crackleIntensity.toString());
       formData.append('bgMusicId', selectedBgMusicId || 'none');
@@ -347,6 +351,31 @@ function StudioContent() {
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-serif text-stone-300 mb-2 font-semibold">
+                  What are you creating?
+                </label>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  {OCCASIONS.map((item) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      onClick={() => setOccasion(item.id)}
+                      className={`rounded-xl border px-2 py-2 text-left text-[11px] transition-colors ${
+                        occasion === item.id
+                          ? 'border-amber-500 bg-amber-950/60 text-amber-200'
+                          : 'border-stone-700 bg-stone-950 text-stone-400 hover:border-amber-700/60 hover:text-amber-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs italic text-stone-500">
+                  {OCCASIONS.find((item) => item.id === occasion)?.prompt}
+                </p>
+              </div>
+
               <div>
                 <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">
                   Memory Title (Engraved on Center Disc)

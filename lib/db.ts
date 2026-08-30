@@ -429,6 +429,47 @@ export async function getRecordingBySlug(slug: string, viewer: Viewer = { kind: 
   return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
 }
 
+export async function getRecordingByIdForStatus(id: string): Promise<Pick<Recording, 'id' | 'slug' | 'processing_state' | 'processing_progress' | 'processing_error'> | null> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data } = await supabase
+        .from('recordings')
+        .select('id, slug, processing_state, processing_progress, processing_error')
+        .eq('id', id)
+        .maybeSingle();
+      return (data as any) || null;
+    } catch { return null; }
+  }
+  const store = readLocalStore();
+  const rec = store.recordings.find((r) => r.id === id);
+  return rec ? {
+    id: rec.id,
+    slug: rec.slug,
+    processing_state: rec.processing_state,
+    processing_progress: rec.processing_progress,
+    processing_error: rec.processing_error,
+  } : null;
+}
+
+export async function updateRecordingProcessing(
+  id: string,
+  patch: Pick<Recording, 'processing_state' | 'processing_progress' | 'processing_error' | 'processing_started_at' | 'processing_completed_at' | 'processed_audio_url' | 'duration_seconds'> & Partial<Pick<Recording, 'processed_storage_key'>>
+): Promise<void> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    const { error } = await supabase.from('recordings').update(patch).eq('id', id);
+    if (error) throw new Error(`Recording processing state could not be updated: ${error.message}`);
+    return;
+  }
+  const store = readLocalStore();
+  const index = store.recordings.findIndex((r) => r.id === id);
+  if (index >= 0) {
+    store.recordings[index] = { ...store.recordings[index], ...patch };
+    writeLocalStore(store);
+  }
+}
+
 export async function saveRecording(recording: Recording): Promise<Recording> {
   if (isSupabaseServerConfigured()) {
     const supabase = getServiceSupabase();

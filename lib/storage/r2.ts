@@ -346,7 +346,11 @@ function buildLocalStorage(): StorageOperations {
       return `/api/records/${key.split('/').pop()}`;
     },
     async putObject(key, body, _contentType): Promise<ObjectRef> {
-      const target = path.join(root, key);
+      // Local fallback keeps keys in metadata but stores the file flat so the
+      // existing Range-serving route can resolve it without exposing an
+      // arbitrary filesystem path. Record ids are UUID-like, so basenames
+      // remain collision-resistant.
+      const target = path.join(root, path.basename(key));
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, body);
       return {
