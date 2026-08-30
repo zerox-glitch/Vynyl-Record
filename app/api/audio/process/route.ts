@@ -1,233 +1,120 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
-import {
-  processAudioTrack,
-  probeDurationSeconds,
-  transcodeToMp3,
-  audioScratchDir,
-} from '@/lib/audio/processor';
-import { persistRecordAudio, cleanupFiles, extensionFor } from '@/lib/audio/storage';
-import { transcribeAudioWithTimestamps } from '@/lib/transcription';
-import { saveRecording, getAudioAssets } from '@/lib/db';
-import { DEFAULT_AUDIO_ASSETS } from '@/lib/constants';
-import { FilterPresetType, VinylStyleType, Recording, AudioAsset } from '@/types';
+import { enqueueJob } from '@/lib/processing/queue';
+import { saveRecording } from '@/lib/db';
+import { FilterPresetType, OccasionType, Recording, VinylStyleType } from '@/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Vercel caps lambda payload/body size; keep uploads sane. */
-const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
-
-function generateSlug(length = 6): string {
+function safeSlug(title: string): string {
   const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
+  let suffix = '';
+  for (let i = 0; i < 6; i++) suffix += chars[Math.floor(Math.random() * chars.length)];
+  return `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 28) || 'voice-note'}-${suffix}`;
 }
 
-/** Turn an asset id (uuid, short name, or file url) into an on-disk path. */
-function findAssetFile(assets: AudioAsset[], id: string): string | null {
-  const needle = String(id || '').toLowerCase().trim();
-  if (!needle || needle === 'none' || needle === 'null') return null;
-
-  const matches = assets.filter((a) => {
-    const url = String(a.file_url || '');
-    return (
-      a.id.toLowerCase() === needle ||
-      url.toLowerCase() === needle ||
-      url.toLowerCase().includes(`/${needle}.`) ||
-      url.toLowerCase().includes(needle) ||
-      a.title.toLowerCase().includes(needle) ||
-      a.category === needle
-    );
-  });
-
-  const ordered = matches.length ? matches : assets.filter((a) => a.category === 'bg_music');
-  for (const asset of ordered) {
-    const url = String(asset.file_url || '');
-    if (!url) continue;
-    const fileName = path.basename(url.split('?')[0]);
-    // persistAssetFile() stages custom uploads in both places.
-    const candidates = [
-      path.join(process.cwd(), 'public', url.startsWith('/') ? url.slice(1) : url),
-      path.join(process.cwd(), 'public', 'audio', fileName),
-      path.join(process.cwd(), 'public', 'records', fileName),
-    ];
-    for (const candidate of candidates) {
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {}
-    }
-  }
-  return null;
+function safeText(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+function safeNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+}
+function safeId(value: unknown): string | null {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-]{3,100}$/.test(value) ? value : null;
 }
 
+/**
+ * Queue a recording after the browser has uploaded its original directly to
+ * R2 (or to the signed local fallback). No audio bytes enter this request and
+ * no FFmpeg runs here. The response is intentionally fast: the UI polls the
+ * status endpoint and routes to the finished record only after completion.
+ */
 export async function POST(req: NextRequest) {
-  const sessionId = uuidv4();
-  const scratch = audioScratchDir();
-
-  const voiceFilePath = path.join(scratch, `voice_${sessionId}`);
-  const voiceMp3Path = path.join(scratch, `voice_${sessionId}.mp3`);
-  const outputFilePath = path.join(scratch, `record_${sessionId}.mp3`);
-
   try {
-    const formData = await req.formData();
-    const audioFile = formData.get('audio') as File | null;
+    const body = await req.json();
+    const recordId = safeId(body?.recordId);
+    const originalStorageKey = safeText(body?.originalStorageKey, 240);
+    const originalUrl = safeText(body?.originalUrl, 500);
+    const originalContentType = safeText(body?.originalContentType, 80);
 
-    if (!audioFile) {
-      return NextResponse.json(
-        { error: 'No audio recording file provided in payload.' },
-        { status: 400 }
-      );
+    if (!recordId) return NextResponse.json({ error: 'A valid record id is required.' }, { status: 400 });
+    if (!originalStorageKey && !originalUrl) {
+      return NextResponse.json({ error: 'The original upload has not been confirmed.' }, { status: 400 });
+    }
+    if (originalStorageKey && !originalStorageKey.startsWith(`users/anonymous/records/${recordId}/original/`)) {
+      return NextResponse.json({ error: 'The original upload path is not owned by this record.' }, { status: 403 });
+    }
+    if (originalUrl && !originalUrl.startsWith('/api/records/')) {
+      return NextResponse.json({ error: 'The original upload URL is invalid.' }, { status: 400 });
     }
 
-    if (audioFile.size < 200) {
-      return NextResponse.json(
-        { error: 'That recording is empty — check the microphone permission and record again.' },
-        { status: 400 }
-      );
-    }
+    const title = safeText(body?.title, 120) || 'Untitled Memory';
+    const recipientName = safeText(body?.recipientName, 120);
+    const senderName = safeText(body?.senderName, 120);
+    const occasion = safeText(body?.occasion, 40) as OccasionType;
+    const filterPreset = (safeText(body?.filterPreset, 30) || 'gramophone') as FilterPresetType;
+    const vinylStyle = (safeText(body?.vinylStyle, 40) || 'classic_red') as VinylStyleType;
+    const crackleIntensity = safeNumber(body?.crackleIntensity, 0.22, 0, 1);
+    const maxSeconds = Math.round(safeNumber(body?.maxSeconds, 600, 5, 1800));
+    const durationSeconds = safeNumber(body?.durationSeconds, 0, 0, maxSeconds);
 
-    if (audioFile.size > MAX_UPLOAD_BYTES) {
-      return NextResponse.json(
-        { error: `Recording is too large (${(audioFile.size / 1024 / 1024).toFixed(1)} MB).` },
-        { status: 413 }
-      );
-    }
-
-    const title = ((formData.get('title') as string) || 'Untitled Memory').trim() || 'Untitled Memory';
-    const recipientName = (formData.get('recipientName') as string) || '';
-    const senderName = (formData.get('senderName') as string) || '';
-    const filterPreset = ((formData.get('filterPreset') as string) || 'gramophone') as FilterPresetType;
-    const crackleIntensity = parseFloat((formData.get('crackleIntensity') as string) || '0.22');
-    const bgMusicId = (formData.get('bgMusicId') as string) || null;
-    const vinylStyle = ((formData.get('vinylStyle') as string) || 'classic_red') as VinylStyleType;
-    const maxSeconds = Math.max(5, Math.min(1800, parseInt((formData.get('maxSeconds') as string) || '600', 10) || 600));
-
-    // 1. Stage the upload. ffmpeg sniffs the container, so the extension only
-    //    matters for the "give the browser the original" fallback below.
-    const buffer = Buffer.from(await audioFile.arrayBuffer());
-    await fs.promises.writeFile(voiceFilePath, buffer);
-
-    let assets: AudioAsset[] = DEFAULT_AUDIO_ASSETS;
-    try {
-      const fromDb = await getAudioAssets();
-      if (fromDb?.length) assets = fromDb;
-    } catch (err: any) {
-      console.warn('[API] asset lookup failed, using bundled defaults:', err?.message);
-    }
-
-    const bgMusicFilePath = bgMusicId ? findAssetFile(assets, bgMusicId) : null;
-    if (bgMusicId && bgMusicId !== 'none' && !bgMusicFilePath) {
-      console.warn(`[API] background music "${bgMusicId}" had no readable file — pressing voice + crackle only`);
-    }
-
-    // Crackle is a bed, not an effect: prefer the DB asset, then the shipped file.
-    const crackleAssetPath = findAssetFile(
-      assets.filter((a) => a.category === 'crackle'),
-      'crackle'
-    );
-    const crackleFilePath =
-      crackleAssetPath || path.join(process.cwd(), 'public', 'audio', 'crackle-vintage.mp3');
-
-    // 2. A normalized mono/stereo mp3 of the take: used for transcription and as
-    //    the record's fallback if the mastered file ever goes missing.
-    const rawIsMp3 = await transcodeToMp3(voiceFilePath, voiceMp3Path);
-    const sourceForTranscription = rawIsMp3 ? voiceMp3Path : voiceFilePath;
-
-    // 3. Press the master (voice filter + BG + crackle, gain-compensated).
-    const master = await processAudioTrack({
-      voiceFilePath: sourceForTranscription,
-      outputFilePath,
-      filterPreset,
-      crackleIntensity: Number.isFinite(crackleIntensity) ? crackleIntensity : 0.22,
-      bgMusicFilePath,
-      crackleFilePath: fs.existsSync(crackleFilePath) ? crackleFilePath : null,
-      maxSeconds,
-    });
-
-    const durationSeconds = Number(
-      (master.durationSeconds || (await probeDurationSeconds(master.outputFilePath)) || 0).toFixed(2)
-    );
-
-    // 4. Persist real files so playback can be streamed + seeked.
-    const masterExt = master.container === 'mp3' ? 'mp3' : extensionFor(audioFile.type, '.webm').replace('.', '');
-    const masterStored = persistRecordAudio(
-      `record_${sessionId}.${masterExt}`,
-      await fs.promises.readFile(master.outputFilePath)
-    );
-
-    let rawStored: { url: string; location: string } | null = null;
-    if (rawIsMp3) {
-      const stored = persistRecordAudio(`raw_${sessionId}.mp3`, await fs.promises.readFile(voiceMp3Path));
-      rawStored = { url: stored.url, location: stored.location };
-    } else {
-      // Keep the original container but name it correctly (an .mp3 that is really
-      // webm is exactly how "silent record" bugs are born).
-      const rawExt = extensionFor(audioFile.type, '.webm').replace('.', '');
-      const stored = persistRecordAudio(`raw_${sessionId}.${rawExt}`, buffer);
-      rawStored = { url: stored.url, location: stored.location };
-    }
-
-    // 5. Transcription (best effort — never blocks the press).
-    const transcriptJson = await transcribeAudioWithTimestamps(
-      sourceForTranscription,
-      durationSeconds || 10,
-      title
-    ).catch((err) => {
-      console.warn('[API] transcription skipped:', err?.message);
-      return [];
-    });
-
-    // 6. Persist the record.
-    const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 28) || 'voice-note'}-${generateSlug(6)}`;
-
-    const newRecording: Recording = {
-      id: sessionId,
-      slug,
+    const recording: Recording = {
+      id: recordId,
+      slug: safeSlug(title),
       user_id: null,
       title,
       recipient_name: recipientName,
       sender_name: senderName,
-      processed_audio_url: masterStored.url,
-      raw_voice_url: rawStored?.url || masterStored.url,
-      transcript_json: transcriptJson,
+      processed_audio_url: originalUrl || '',
+      raw_voice_url: originalUrl || '',
+      transcript_json: [],
       vinyl_style: vinylStyle,
       filter_preset: filterPreset,
-      crackle_intensity: Number.isFinite(crackleIntensity) ? crackleIntensity : 0.22,
-      bg_music_id: bgMusicId,
+      crackle_intensity: crackleIntensity,
+      bg_music_id: safeText(body?.bgMusicId, 120) || null,
       views: 0,
       created_at: new Date().toISOString(),
-      duration_seconds: durationSeconds,
+      duration_seconds: durationSeconds || undefined,
+      visibility: 'unlisted',
+      occasion: occasion || null,
+      dedication: safeText(body?.dedication, 1000) || null,
+      side_a_label: safeText(body?.sideALabel, 80) || null,
+      side_b_label: safeText(body?.sideBLabel, 80) || null,
+      original_storage_key: originalStorageKey || null,
+      processing_state: 'queued',
+      processing_progress: 0,
+      processing_error: null,
     };
 
-    await saveRecording(newRecording);
+    await saveRecording(recording);
+    const job = await enqueueJob({
+      recording_id: recording.id,
+      user_id: null,
+      job_type: 'audio_master',
+      params: {
+        voiceFileUrl: originalUrl || null,
+        originalStorageKey: originalStorageKey || null,
+        originalContentType,
+        title,
+        filterPreset,
+        crackleIntensity,
+        bgMusicId: safeText(body?.bgMusicId, 120) || null,
+        vinylStyle,
+        maxSeconds,
+      },
+    });
 
     return NextResponse.json({
       success: true,
-      recording: newRecording,
-      slug,
-      playUrl: `/play/${slug}`,
-      engine: {
-        strategy: master.strategy,
-        container: master.container,
-        mix: master.mix,
-        storage: masterStored.location,
-        durationSeconds,
-        bytes: masterStored.bytes,
-      },
-    });
+      queued: true,
+      slug: recording.slug,
+      recording,
+      jobId: job.id,
+      statusUrl: `/api/processing/status/${encodeURIComponent(recording.id)}`,
+    }, { status: 202 });
   } catch (error: any) {
-    console.error('[AudioEngine] Error:', error);
-    return NextResponse.json(
-      { error: error?.message || 'Server failed to synthesize vinyl recording.' },
-      { status: 500 }
-    );
-  } finally {
-    cleanupFiles([voiceFilePath, voiceMp3Path, outputFilePath]);
+    console.error('[ProcessingQueue] enqueue error:', error);
+    return NextResponse.json({ error: error?.message || 'Could not queue the recording.' }, { status: 500 });
   }
 }

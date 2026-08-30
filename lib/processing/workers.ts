@@ -24,8 +24,10 @@ import {
   completeJob,
   failJob,
 } from './queue';
-import { processAudioTrack } from '@/lib/audio/processor';
-import { downloadToTmp } from '@/lib/audio/storage';
+import { processAudioTrack, probeDurationSeconds } from '@/lib/audio/processor';
+import { downloadToTmp, persistRecordAudio, cleanupFiles } from '@/lib/audio/storage';
+import { getRecordingByIdForStatus, updateRecordingProcessing } from '@/lib/db';
+import { getStorage, buildRecordKey } from '@/lib/storage/r2';
 
 // ============================================================================
 
@@ -57,11 +59,21 @@ export const audioMasterWorker: ProcessingWorker = {
     // Pull the input bytes onto disk so FFmpeg can stream the file.
     const source = await downloadToTmp(params.voiceFileUrl, `${job.id}-source`);
 
+    await updateRecordingProcessing(job.recording_id, {
+      processing_state: 'processing',
+      processing_progress: 15,
+      processing_error: null,
+      processing_started_at: new Date().toISOString(),
+      processing_completed_at: null,
+      processed_audio_url: '',
+      duration_seconds: undefined,
+    });
     update({ result: { stage: 'rendering_master' } });
 
+    const outputPath = source.replace(/(\.\w+)?$/, '-master.mp3');
     const result = await processAudioTrack({
       voiceFilePath: source,
-      outputFilePath: source.replace(/(\.\w+)?$/, '-master.mp3'),
+      outputFilePath: outputPath,
       filterPreset: params.filterPreset as any,
       crackleIntensity: params.crackleIntensity ?? 0.2,
       bgMusicFilePath: params.bgMusicFilePath ?? null,
@@ -69,15 +81,44 @@ export const audioMasterWorker: ProcessingWorker = {
       maxSeconds: params.maxSeconds ?? 600,
     });
 
-    update({
-      result: {
-        stage: 'persisting_master',
-        durationSeconds: result.durationSeconds,
-        masterLocalPath: result.outputFilePath,
-      },
-    });
+    update({ result: { stage: 'persisting_master', durationSeconds: result.durationSeconds } });
+    const masterBytes = await import('node:fs/promises').then((mod) => mod.readFile(result.outputFilePath));
+    const storage = getStorage();
+    let processedUrl = '';
+    let processedKey: string | null = null;
 
-    return job;
+    if (storage.isR2Configured) {
+      processedKey = buildRecordKey({
+        userId: job.user_id || 'anonymous',
+        recordId: job.recording_id,
+        variant: 'processed',
+        filename: 'master.mp3',
+      });
+      const stored = await storage.putObject(processedKey, new Uint8Array(masterBytes), 'audio/mpeg');
+      processedUrl = stored.url || (await storage.signedDownloadUrl(processedKey, 3600)).url;
+    } else {
+      processedUrl = persistRecordAudio(`record_${job.recording_id}.mp3`, masterBytes).url;
+    }
+
+    const duration = result.durationSeconds || (await probeDurationSeconds(result.outputFilePath));
+    await updateRecordingProcessing(job.recording_id, {
+      processing_state: 'completed',
+      processing_progress: 100,
+      processing_error: null,
+      processing_started_at: new Date().toISOString(),
+      processing_completed_at: new Date().toISOString(),
+      processed_audio_url: processedUrl,
+      duration_seconds: duration,
+      processed_storage_key: processedKey,
+    });
+    cleanupFiles([source, result.outputFilePath]);
+
+    return { ...job, result: {
+      stage: 'completed',
+      durationSeconds: duration,
+      processedAudioUrl: processedUrl,
+      processedStorageKey: processedKey,
+    }};
   },
 };
 
