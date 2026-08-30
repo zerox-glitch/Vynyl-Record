@@ -223,11 +223,11 @@ export default function PlayRecordingPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-950/60 px-3 py-1 font-mono text-xs text-amber-300">
                 <Disc3 className="h-3.5 w-3.5 text-amber-400" />
-                <span>3D Vinyl Player · 33⅓ RPM</span>
+                <span>A record made for this moment</span>
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-900 px-3 py-1 font-mono text-xs text-stone-300">
                 <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                <span>Drag to orbit · scroll to zoom</span>
+                <span>Take your time with it</span>
               </span>
               {isNeedleDropping && (
                 <span className="animate-pulse rounded-full border border-amber-300 bg-amber-600 px-3 py-1 font-mono text-xs font-bold text-stone-950">
@@ -245,8 +245,8 @@ export default function PlayRecordingPage() {
                   {recording.views} plays
                 </span>
                 <span>•</span>
-                <span className="text-amber-300/80">
-                  {styleConfig.name} • {filterConfig.name}
+                  <span className="text-amber-300/80">
+                  {recording.occasion ? `${recording.occasion} · ` : ''}{styleConfig.name}
                 </span>
                 {recording.duration_seconds ? (
                   <>
