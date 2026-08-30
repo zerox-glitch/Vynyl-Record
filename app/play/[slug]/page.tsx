@@ -82,7 +82,9 @@ export default function PlayRecordingPage() {
   }, []);
 
   const player = useVinylPlayer({
-    src: recording?.processed_audio_url,
+    src: recording
+      ? (recording.processed_storage_key ? `/api/play/${encodeURIComponent(slug)}/audio` : recording.processed_audio_url)
+      : null,
     fallbackSrc: recording?.raw_voice_url && recording.raw_voice_url !== recording.processed_audio_url
       ? recording.raw_voice_url
       : null,

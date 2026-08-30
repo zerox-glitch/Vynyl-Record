@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRecordingBySlug } from '@/lib/db';
+import { getStorage } from '@/lib/storage/r2';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,6 +13,11 @@ export async function GET(
     const recording = await getRecordingBySlug(params.slug, { kind: 'anonymous' });
     if (!recording) {
       return NextResponse.json({ error: 'Vinyl recording not found.' }, { status: 404 });
+    }
+
+    if (recording.processed_storage_key && getStorage().isR2Configured) {
+      const signed = await getStorage().signedDownloadUrl(recording.processed_storage_key, 300);
+      return NextResponse.redirect(signed.url, 303);
     }
 
     let audio: Uint8Array;
