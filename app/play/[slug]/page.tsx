@@ -72,6 +72,10 @@ export default function PlayRecordingPage() {
       })
       .then((data) => {
         setRecording(data?.recording ? data.recording : fallbackDemo());
+        fetch('/api/analytics', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventType: 'share_view', recordingId: data?.recording?.id }),
+        }).catch(() => {});
       })
       .catch(() => setRecording(fallbackDemo()))
       .finally(() => setLoading(false));

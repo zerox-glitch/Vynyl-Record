@@ -26,7 +26,8 @@ import {
 } from './queue';
 import { processAudioTrack, probeDurationSeconds } from '@/lib/audio/processor';
 import { downloadToTmp, persistRecordAudio, cleanupFiles } from '@/lib/audio/storage';
-import { getRecordingByIdForStatus, updateRecordingProcessing } from '@/lib/db';
+import { getRecordingByIdForStatus, updateRecordingProcessing, saveTranscript } from '@/lib/db';
+import { getTranscriptProvider } from '@/lib/transcription/provider';
 import { getStorage, buildRecordKey } from '@/lib/storage/r2';
 
 // ============================================================================
@@ -139,11 +140,14 @@ export const transcriptionWorker: ProcessingWorker = {
     job: ProcessingJob,
     update: (patch: Partial<ProcessingJob> & { heartbeat?: boolean }) => void
   ): Promise<ProcessingJob> {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY is not configured; transcript unavailable');
-    }
-    update({ result: { stage: 'transcribing' } });
-    return job;
+    const params = (job.params || {}) as { audioPath?: string; durationSeconds?: number; title?: string };
+    const provider = getTranscriptProvider();
+    if (!provider.isConfigured()) throw new Error('OPENAI_API_KEY is not configured; transcript unavailable');
+    if (!params.audioPath) throw new Error('transcription job missing audioPath');
+    update({ result: { stage: 'transcribing', provider: provider.id } });
+    const words = await provider.transcribe(params.audioPath, params.durationSeconds || 10, params.title);
+    await saveTranscript({ recordingId: job.recording_id, words, provider: provider.id, isPubliclyVisible: false });
+    return { ...job, result: { stage: 'completed', provider: provider.id, wordCount: words.length } };
   },
 };
 

@@ -27,7 +27,9 @@ function isSafeId(value: unknown): value is string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { recordId, filename, contentType, size } = body || {};
+    const { recordId, filename, size } = body || {};
+    const rawContentType = typeof body?.contentType === 'string' ? body.contentType.toLowerCase() : '';
+    const contentType = rawContentType.split(';')[0].trim();
 
     if (!isSafeId(recordId)) return NextResponse.json({ error: 'A valid record id is required.' }, { status: 400 });
     if (typeof filename !== 'string' || filename.length < 1 || filename.length > 120) {

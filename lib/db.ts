@@ -470,6 +470,26 @@ export async function updateRecordingProcessing(
   }
 }
 
+export async function saveTranscript(input: {
+  recordingId: string;
+  words: import('@/types').TranscriptWord[];
+  isPubliclyVisible?: boolean;
+  provider?: string | null;
+}): Promise<void> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    const { error } = await supabase.from('record_transcripts').upsert({
+      recording_id: input.recordingId,
+      words: input.words,
+      is_publicly_visible: input.isPubliclyVisible ?? false,
+      provider: input.provider ?? null,
+    }, { onConflict: 'recording_id' });
+    if (error) throw new Error(`Transcript could not be saved: ${error.message}`);
+    return;
+  }
+  patchLocalStore('recordTranscripts', (rows) => ({ ...(rows || {}), [input.recordingId]: input.words }));
+}
+
 export async function saveRecording(recording: Recording): Promise<Recording> {
   if (isSupabaseServerConfigured()) {
     const supabase = getServiceSupabase();
