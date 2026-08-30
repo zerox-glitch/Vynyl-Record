@@ -74,6 +74,8 @@ export interface TranscriptWord {
   end: number;
 }
 
+export type RecordingVisibility = 'public' | 'unlisted' | 'private';
+
 export interface Recording {
   id: string;
   slug: string;
@@ -91,6 +93,8 @@ export interface Recording {
   views: number;
   created_at: string;
   duration_seconds?: number;
+  /** Visibility: public (anyone can find), unlisted (link only), private (owner only). */
+  visibility?: RecordingVisibility;
 }
 
 export interface IntegrationSettings {
