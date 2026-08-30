@@ -429,13 +429,13 @@ export async function getRecordingBySlug(slug: string, viewer: Viewer = { kind: 
   return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
 }
 
-export async function getRecordingByIdForStatus(id: string): Promise<Pick<Recording, 'id' | 'slug' | 'processing_state' | 'processing_progress' | 'processing_error'> | null> {
+export async function getRecordingByIdForStatus(id: string): Promise<Pick<Recording, 'id' | 'slug' | 'user_id' | 'processing_state' | 'processing_progress' | 'processing_error'> | null> {
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
       const { data } = await supabase
         .from('recordings')
-        .select('id, slug, processing_state, processing_progress, processing_error')
+        .select('id, slug, user_id, processing_state, processing_progress, processing_error')
         .eq('id', id)
         .maybeSingle();
       return (data as any) || null;
@@ -446,6 +446,7 @@ export async function getRecordingByIdForStatus(id: string): Promise<Pick<Record
   return rec ? {
     id: rec.id,
     slug: rec.slug,
+    user_id: rec.user_id,
     processing_state: rec.processing_state,
     processing_progress: rec.processing_progress,
     processing_error: rec.processing_error,

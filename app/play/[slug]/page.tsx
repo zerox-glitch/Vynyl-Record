@@ -537,7 +537,7 @@ export default function PlayRecordingPage() {
                 192 kbps MP3 • voice + {filterConfig.name} + ambience
               </p>
             </div>
-            <a href={recording.processed_audio_url} download={`${recording.slug || 'vynyl'}.mp3`}>
+            <a href={`/api/play/${encodeURIComponent(recording.slug)}/download`} download={`${recording.slug || 'vynyl'}.mp3`}>
               <Button variant="outline" size="sm" leftIcon={<Download className="h-4 w-4 text-amber-400" />}>
                 Download MP3
               </Button>

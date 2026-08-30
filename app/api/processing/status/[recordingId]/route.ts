@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRecordingByIdForStatus } from '@/lib/db';
 import { getRecordingStatus } from '@/lib/processing/queue';
+import { getCustomerUser } from '@/lib/supabase/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,10 @@ export async function GET(
   try {
     const recording = await getRecordingByIdForStatus(params.recordingId);
     if (!recording) return NextResponse.json({ error: 'Recording not found.' }, { status: 404 });
+    const user = await getCustomerUser();
+    if (recording.user_id && recording.user_id !== user?.id) {
+      return NextResponse.json({ error: 'Recording not found.' }, { status: 404 });
+    }
     const status = await getRecordingStatus(params.recordingId);
     return NextResponse.json({
       recording: {
