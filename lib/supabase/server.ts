@@ -9,6 +9,14 @@ export const isSupabaseServerConfigured = () => {
   return Boolean(url.startsWith('https://') && url.includes('.supabase.co') && !url.includes('your-project') && key && !key.includes('your-') && !key.includes('placeholder'));
 };
 
+/** Production must fail explicitly instead of silently creating a second DB. */
+export function requireSupabaseServer() {
+  if (!isSupabaseServerConfigured()) {
+    throw new Error('Supabase server database is not configured. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+  }
+  return getServiceSupabase();
+}
+
 export const getServiceSupabase = () => {
   return createClient(supabaseUrl, supabaseServiceKey, {
     auth: {

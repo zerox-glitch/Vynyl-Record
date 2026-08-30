@@ -31,6 +31,16 @@ interface LocalStore {
 // Serverless writable directory: use os.tmpdir() to prevent EROFS errors on Vercel
 const DATA_FILE = path.join(os.tmpdir(), 'vynyl_local_database.json');
 
+/** Local JSON is demo/dev only. Production must never silently fork data. */
+function localFallbackAllowed(): boolean {
+  return process.env.NODE_ENV !== 'production' || process.env.ALLOW_LOCAL_DEMO_STORE === 'true';
+}
+function requireLocalFallbackAllowed(): void {
+  if (!localFallbackAllowed()) {
+    throw new Error('Persistent database is unavailable. Configure Supabase; local JSON fallback is disabled in production.');
+  }
+}
+
 const DEFAULT_PROFILES: Profile[] = [
   {
     id: 'user-0001',
@@ -146,6 +156,7 @@ function writeLocalStoreRaw(store: LocalStore) {
  * (below) to extend the store with keys that aren't part of LocalStore.
  */
 function readLocalStore(): LocalStore {
+  requireLocalFallbackAllowed();
   return readLocalStoreRaw();
 }
 function writeLocalStore(store: LocalStore): void {
