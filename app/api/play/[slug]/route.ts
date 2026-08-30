@@ -11,7 +11,10 @@ export async function GET(
       return NextResponse.json({ error: 'Slug parameter is required' }, { status: 400 });
     }
 
-    const recording = await getRecordingBySlug(slug);
+    // Pass anonymous viewer: 'public' + 'unlisted' recordings return,
+    // 'private' recordings return null (== 404, never leaks existence).
+    // The /dashboard endpoint passes the authenticated viewer explicitly.
+    const recording = await getRecordingBySlug(slug, { kind: 'anonymous' });
     if (!recording) {
       return NextResponse.json({ error: 'Vinyl recording not found' }, { status: 404 });
     }
