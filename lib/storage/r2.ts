@@ -108,7 +108,10 @@ async function presignR2(args: {
   params.set('X-Amz-Credential', `${args.accessKeyId}/${credentialScope}`);
   params.set('X-Amz-Date', amzDate);
   params.set('X-Amz-Expires', String(args.ttlSeconds));
-  params.set('X-Amz-SignedHeaders', args.method === 'PUT' ? 'host' : 'host');
+  params.set('X-Amz-SignedHeaders', 'host');
+  // AWS SigV4 canonical query strings are lexicographically sorted before
+  // hashing. URLSearchParams preserves insertion order by default.
+  params.sort();
 
   const signedHeaders = 'host';
   const canonicalUri = `/${encodeURIComponent(args.bucket)}/${args.key
