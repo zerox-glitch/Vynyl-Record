@@ -36,6 +36,14 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 const TMP_DIR = path.join(__dirname, '../tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
+// Release MP3s are committed assets. Builds must be deterministic and must
+// not rewrite them with random noise; run GENERATE_AUDIO_ASSETS=true locally
+// when intentionally regenerating a set.
+if (process.env.GENERATE_AUDIO_ASSETS !== 'true') {
+  console.log('Using committed audio assets (set GENERATE_AUDIO_ASSETS=true to regenerate).');
+  process.exit(0);
+}
+
 function resolveFfmpeg() {
   try {
     const installer = require('@ffmpeg-installer/ffmpeg');
