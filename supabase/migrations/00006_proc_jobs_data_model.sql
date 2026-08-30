@@ -58,6 +58,18 @@ CREATE INDEX IF NOT EXISTS recordings_user_created_idx
   ON public.recordings(user_id, created_at DESC);
 
 -- =========================================================================
+-- Customer account ownership. Customer auth stays separate from the existing
+-- administrator HMAC cookie. This only adds a foreign-key/index relationship.
+-- =========================================================================
+
+ALTER TABLE public.recordings
+  DROP CONSTRAINT IF EXISTS recordings_user_id_fkey,
+  ADD CONSTRAINT recordings_user_id_fkey
+    FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS recordings_owner_idx ON public.recordings(user_id, created_at DESC);
+
+-- =========================================================================
 -- processing_jobs: durable job queue rows
 -- =========================================================================
 

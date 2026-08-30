@@ -14,6 +14,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { getRecordingsForViewer } from '@/lib/db';
+import { getCustomerUser } from '@/lib/supabase/auth';
 import { Navbar } from '@/components/ui/Navbar';
 import { Footer } from '@/components/ui/Footer';
 import { Button } from '@/components/ui/Button';
@@ -26,7 +27,8 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export default async function LibraryPage() {
-  const recordings = await getRecordingsForViewer({ kind: 'anonymous' });
+  const user = await getCustomerUser();
+  const recordings = await getRecordingsForViewer(user ? { kind: 'user', userId: user.id } : { kind: 'anonymous' });
 
   return (
     <div className="flex min-h-screen flex-col bg-[#0c0a09] text-stone-100">
@@ -49,11 +51,10 @@ export default async function LibraryPage() {
               close.
             </p>
           </div>
-          <Link href="/studio">
-            <Button variant="primary" size="lg" leftIcon={<Sparkles className="h-4 w-4 text-stone-950" />}>
-              Press a new voice
-            </Button>
-          </Link>
+          <div className="flex flex-wrap gap-3">
+            {!user && <Link href="/login"><Button variant="outline" size="lg">Sign in to save privately</Button></Link>}
+            <Link href="/studio"><Button variant="primary" size="lg" leftIcon={<Sparkles className="h-4 w-4 text-stone-950" />}>Press a new voice</Button></Link>
+          </div>
         </div>
 
         {recordings.length === 0 ? (
