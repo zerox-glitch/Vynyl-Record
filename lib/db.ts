@@ -374,7 +374,15 @@ const VISIBLE_TO_VIEWER = (rec: Recording, viewer: Viewer): boolean => {
 };
 
 function applyVisibilityFilter(rows: Recording[], viewer: Viewer): Recording[] {
-  return rows.filter((r) => VISIBLE_TO_VIEWER(r, viewer));
+  // Listing is stricter than link-addressable playback: unlisted records
+  // must never appear in a library/list endpoint for unrelated visitors.
+  return rows.filter((r) => {
+    const visibility = r.visibility ?? 'unlisted';
+    if (visibility === 'public') return true;
+    if (viewer.kind === 'admin') return true;
+    if (viewer.kind === 'user' && r.user_id === viewer.userId) return true;
+    return false;
+  });
 }
 
 export async function getRecordings(): Promise<Recording[]> {
