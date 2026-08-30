@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildRecordKey, getStorage } from '@/lib/storage/r2';
 import { createUploadIntent } from '@/lib/storage/upload-intent';
+import { getCustomerUser } from '@/lib/supabase/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,9 +40,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Audio must be between 200 bytes and ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.` }, { status: 413 });
     }
 
-    // In the auth-free demo path, use a stable anonymous namespace. This is
-    // still safe because the upload token is signed and scoped to one key.
-    const userId = 'anonymous';
+    // Customer accounts are optional for backward compatibility. When a
+    // Supabase session exists, bind the path to that user's id; otherwise
+    // use the anonymous demo namespace with a signed, one-key capability.
+    const customer = await getCustomerUser();
+    const userId = customer?.id || 'anonymous';
     const key = buildRecordKey({
       userId,
       recordId,
@@ -57,6 +60,7 @@ export async function POST(req: NextRequest) {
         direct: true,
         ...upload,
         intent: intent.token,
+        ownerUserId: userId,
         maxBytes: MAX_UPLOAD_BYTES,
       });
     }

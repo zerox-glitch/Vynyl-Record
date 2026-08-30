@@ -497,6 +497,12 @@ export default function PlayRecordingPage() {
             </div>
           </div>
 
+          <div className="rounded-2xl border border-amber-700/30 bg-amber-950/20 p-4 text-center">
+            <img src={`/api/qr/${recording.slug}?size=320`} alt="QR code for this record" className="mx-auto h-40 w-40 rounded-lg bg-white p-2" />
+            <p className="mt-2 text-xs text-stone-400">Print it on a card. Let the scan become the surprise.</p>
+            <a href={`/api/qr/${recording.slug}?size=1200`} download={`${recording.slug}-qr.png`} className="mt-3 inline-flex rounded-xl border border-amber-600/40 px-3 py-2 text-xs text-amber-200 hover:bg-amber-950/50">Download QR</a>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <a
               href={`https://wa.me/?text=${encodeURIComponent(

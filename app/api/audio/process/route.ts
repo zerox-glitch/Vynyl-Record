@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { enqueueJob } from '@/lib/processing/queue';
 import { saveRecording } from '@/lib/db';
+import { getCustomerUser } from '@/lib/supabase/auth';
 import { FilterPresetType, OccasionType, Recording, VinylStyleType } from '@/types';
 
 export const runtime = 'nodejs';
@@ -42,7 +43,9 @@ export async function POST(req: NextRequest) {
     if (!originalStorageKey && !originalUrl) {
       return NextResponse.json({ error: 'The original upload has not been confirmed.' }, { status: 400 });
     }
-    if (originalStorageKey && !originalStorageKey.startsWith(`users/anonymous/records/${recordId}/original/`)) {
+    const customer = await getCustomerUser();
+    const ownerUserId = customer?.id || 'anonymous';
+    if (originalStorageKey && !originalStorageKey.startsWith(`users/${ownerUserId}/records/${recordId}/original/`)) {
       return NextResponse.json({ error: 'The original upload path is not owned by this record.' }, { status: 403 });
     }
     if (originalUrl && !originalUrl.startsWith('/api/records/')) {
@@ -62,7 +65,7 @@ export async function POST(req: NextRequest) {
     const recording: Recording = {
       id: recordId,
       slug: safeSlug(title),
-      user_id: null,
+      user_id: customer?.id || null,
       title,
       recipient_name: recipientName,
       sender_name: senderName,
@@ -90,7 +93,7 @@ export async function POST(req: NextRequest) {
     await saveRecording(recording);
     const job = await enqueueJob({
       recording_id: recording.id,
-      user_id: null,
+      user_id: customer?.id || null,
       job_type: 'audio_master',
       params: {
         voiceFileUrl: originalUrl || null,
