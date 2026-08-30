@@ -122,6 +122,10 @@ export function resolveRecordFile(filename: string): string | null {
     path.join(TMP_RECORDS_DIR, safe),
     path.join(PUBLIC_AUDIO_DIR, safe),
     path.join(TMP_AUDIO_DIR, safe),
+    // Direct-upload fallback stores R2-shaped originals under this flat
+    // basename, so workers and local playback can resolve them without
+    // accepting a caller-controlled directory.
+    path.join(TMP_AUDIO_DIR, `upload-${safe}`),
   ];
 
   for (const candidate of candidates) {
