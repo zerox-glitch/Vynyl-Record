@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-// 3D anime turntable — SSR unsafe, and only mounted once per page.
+// 3D turntable — SSR unsafe, and only mounted once per page.
 const AnimeTurntablePlayer = dynamic(
   () => import('@/components/3d/AnimeTurntablePlayer').then((m) => m.AnimeTurntablePlayer),
   {
@@ -72,6 +72,10 @@ export default function PlayRecordingPage() {
       })
       .then((data) => {
         setRecording(data?.recording ? data.recording : fallbackDemo());
+        fetch('/api/analytics', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventType: 'share_view', recordingId: data?.recording?.id }),
+        }).catch(() => {});
       })
       .catch(() => setRecording(fallbackDemo()))
       .finally(() => setLoading(false));
@@ -82,7 +86,9 @@ export default function PlayRecordingPage() {
   }, []);
 
   const player = useVinylPlayer({
-    src: recording?.processed_audio_url,
+    src: recording
+      ? (recording.processed_storage_key ? `/api/play/${encodeURIComponent(slug)}/audio` : recording.processed_audio_url)
+      : null,
     fallbackSrc: recording?.raw_voice_url && recording.raw_voice_url !== recording.processed_audio_url
       ? recording.raw_voice_url
       : null,
@@ -217,11 +223,11 @@ export default function PlayRecordingPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-950/60 px-3 py-1 font-mono text-xs text-amber-300">
                 <Disc3 className="h-3.5 w-3.5 text-amber-400" />
-                <span>3D Vinyl Player · 33⅓ RPM</span>
+                <span>A record made for this moment</span>
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-900 px-3 py-1 font-mono text-xs text-stone-300">
                 <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                <span>Drag to orbit · scroll to zoom</span>
+                <span>Take your time with it</span>
               </span>
               {isNeedleDropping && (
                 <span className="animate-pulse rounded-full border border-amber-300 bg-amber-600 px-3 py-1 font-mono text-xs font-bold text-stone-950">
@@ -239,8 +245,8 @@ export default function PlayRecordingPage() {
                   {recording.views} plays
                 </span>
                 <span>•</span>
-                <span className="text-amber-300/80">
-                  {styleConfig.name} • {filterConfig.name}
+                  <span className="text-amber-300/80">
+                  {recording.occasion ? `${recording.occasion} · ` : ''}{styleConfig.name}
                 </span>
                 {recording.duration_seconds ? (
                   <>
@@ -497,6 +503,12 @@ export default function PlayRecordingPage() {
             </div>
           </div>
 
+          <div className="rounded-2xl border border-amber-700/30 bg-amber-950/20 p-4 text-center">
+            <img src={`/api/qr/${recording.slug}?size=320`} alt="QR code for this record" className="mx-auto h-40 w-40 rounded-lg bg-white p-2" />
+            <p className="mt-2 text-xs text-stone-400">Print it on a card. Let the scan become the surprise.</p>
+            <a href={`/api/qr/${recording.slug}?size=1200`} download={`${recording.slug}-qr.png`} className="mt-3 inline-flex rounded-xl border border-amber-600/40 px-3 py-2 text-xs text-amber-200 hover:bg-amber-950/50">Download QR</a>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <a
               href={`https://wa.me/?text=${encodeURIComponent(
@@ -525,7 +537,7 @@ export default function PlayRecordingPage() {
                 192 kbps MP3 • voice + {filterConfig.name} + ambience
               </p>
             </div>
-            <a href={recording.processed_audio_url} download={`${recording.slug || 'vynyl'}.mp3`}>
+            <a href={`/api/play/${encodeURIComponent(recording.slug)}/download`} download={`${recording.slug || 'vynyl'}.mp3`}>
               <Button variant="outline" size="sm" leftIcon={<Download className="h-4 w-4 text-amber-400" />}>
                 Download MP3
               </Button>

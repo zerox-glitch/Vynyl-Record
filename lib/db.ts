@@ -24,10 +24,22 @@ interface LocalStore {
   audioAssets: AudioAsset[];
   profiles: Profile[];
   integrationSettings: IntegrationSettings;
+  /** Optional. Added by lib/processing/queue.ts when the local fallback is alive. */
+  processingJobs?: import('@/types').ProcessingJob[];
 }
 
 // Serverless writable directory: use os.tmpdir() to prevent EROFS errors on Vercel
 const DATA_FILE = path.join(os.tmpdir(), 'vynyl_local_database.json');
+
+/** Local JSON is demo/dev only. Production must never silently fork data. */
+function localFallbackAllowed(): boolean {
+  return process.env.NODE_ENV !== 'production' || process.env.ALLOW_LOCAL_DEMO_STORE === 'true';
+}
+function requireLocalFallbackAllowed(): void {
+  if (!localFallbackAllowed()) {
+    throw new Error('Persistent database is unavailable. Configure Supabase; local JSON fallback is disabled in production.');
+  }
+}
 
 const DEFAULT_PROFILES: Profile[] = [
   {
@@ -98,7 +110,7 @@ function setMemoryStore(store: LocalStore) {
   globalObj.__vynylLocalStore = store;
 }
 
-function readLocalStore(): LocalStore {
+function readLocalStoreRaw(): LocalStore {
   const memStore = getMemoryStore();
 
   try {
@@ -126,7 +138,7 @@ function readLocalStore(): LocalStore {
   return memStore;
 }
 
-function writeLocalStore(store: LocalStore) {
+function writeLocalStoreRaw(store: LocalStore) {
   // Always update in-memory store first
   setMemoryStore(store);
 
@@ -137,6 +149,34 @@ function writeLocalStore(store: LocalStore) {
   } catch (err) {
     console.warn('[DB] Local store tmp write note:', err);
   }
+}
+
+/**
+ * Typed in-file accessors. Caller modules still get `patchLocalStore`
+ * (below) to extend the store with keys that aren't part of LocalStore.
+ */
+function readLocalStore(): LocalStore {
+  requireLocalFallbackAllowed();
+  return readLocalStoreRaw();
+}
+function writeLocalStore(store: LocalStore): void {
+  writeLocalStoreRaw(store);
+}
+
+/**
+ * Patch the local fallback blob in place. Sibling modules (notably the
+ * processing queue) use this to extend the in-process store without having
+ * to import every new field into the strict LocalStore type. Real
+ * production calls go through Supabase.
+ */
+export function patchLocalStore<K extends string>(
+  key: K,
+  mutator: (current: any | undefined) => any
+): void {
+  const store = readLocalStoreRaw() as any;
+  const next = mutator(store[key]);
+  store[key] = next;
+  writeLocalStoreRaw(store);
 }
 
 // 1. SITE SETTINGS
@@ -319,6 +359,43 @@ export async function deleteAudioAsset(id: string): Promise<boolean> {
 }
 
 // 4. RECORDINGS
+//
+// Visibility model:
+//   'public'   — anyone (including anonymous) can find + view.
+//   'unlisted' — only people with the slug URL can view (current
+//                default; matches the old behaviour that everything
+//                was shareable via link).
+//   'private'  — owner OR admin can view; everyone else gets 404.
+//
+// `viewer` is passed in so the same helper powers both the public
+// share API and the dashboard listing API.
+export type Viewer =
+  | { kind: 'anonymous' }
+  | { kind: 'admin' }
+  | { kind: 'user'; userId: string };
+
+const VISIBLE_TO_VIEWER = (rec: Recording, viewer: Viewer): boolean => {
+  const v = rec.visibility ?? 'unlisted';
+  if (v === 'public' || v === 'unlisted') return true;
+  if (v === 'private') {
+    if (viewer.kind === 'admin') return true;
+    if (viewer.kind === 'user' && rec.user_id && rec.user_id === viewer.userId) return true;
+  }
+  return false;
+};
+
+function applyVisibilityFilter(rows: Recording[], viewer: Viewer): Recording[] {
+  // Listing is stricter than link-addressable playback: unlisted records
+  // must never appear in a library/list endpoint for unrelated visitors.
+  return rows.filter((r) => {
+    const visibility = r.visibility ?? 'unlisted';
+    if (visibility === 'public') return true;
+    if (viewer.kind === 'admin') return true;
+    if (viewer.kind === 'user' && r.user_id === viewer.userId) return true;
+    return false;
+  });
+}
+
 export async function getRecordings(): Promise<Recording[]> {
   if (isSupabaseServerConfigured()) {
     try {
@@ -331,15 +408,35 @@ export async function getRecordings(): Promise<Recording[]> {
   }
 
   const store = readLocalStore();
+  // Admin-style call: returns everything, including private.
   return store.recordings;
 }
 
-export async function getRecordingBySlug(slug: string): Promise<Recording | null> {
+export async function getRecordingsForViewer(viewer: Viewer): Promise<Recording[]> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data } = await supabase.from('recordings').select('*').order('created_at', { ascending: false });
+      if (data && data.length > 0) {
+        return applyVisibilityFilter(data as Recording[], viewer);
+      }
+    } catch (err) {
+      console.warn('Supabase recordings fallback:', err);
+    }
+  }
+  const store = readLocalStore();
+  return applyVisibilityFilter(store.recordings, viewer);
+}
+
+export async function getRecordingBySlug(slug: string, viewer: Viewer = { kind: 'anonymous' }): Promise<Recording | null> {
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
       const { data } = await supabase.from('recordings').select('*').eq('slug', slug).single();
-      if (data) return data as Recording;
+      if (data) {
+        const rec = data as Recording;
+        return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
+      }
     } catch (err) {
       console.warn('Supabase getRecordingBySlug fallback:', err);
     }
@@ -347,7 +444,133 @@ export async function getRecordingBySlug(slug: string): Promise<Recording | null
 
   const store = readLocalStore();
   const rec = store.recordings.find((r) => r.slug.toLowerCase() === slug.toLowerCase());
-  return rec || null;
+  if (!rec) return null;
+  return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
+}
+
+export async function getRecordingForAudioFilename(filename: string): Promise<Pick<Recording, 'id' | 'visibility' | 'processed_audio_url' | 'raw_voice_url'> | null> {
+  const needle = path.basename(filename.split('?')[0]).replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!needle) return null;
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const urls = [`/api/records/${needle}`, `/records/${needle}`, `/audio/${needle}`];
+      const { data } = await supabase
+        .from('recordings')
+        .select('id, visibility, processed_audio_url, raw_voice_url')
+        .or(urls.flatMap((url) => [`processed_audio_url.eq.${url}`, `raw_voice_url.eq.${url}`]).join(','))
+        .limit(1)
+        .maybeSingle();
+      return (data as any) || null;
+    } catch { return null; }
+  }
+  const store = readLocalStore();
+  const rec = store.recordings.find((r) =>
+    r.processed_audio_url.includes(needle) || r.raw_voice_url.includes(needle)
+  );
+  return rec ? {
+    id: rec.id,
+    visibility: rec.visibility,
+    processed_audio_url: rec.processed_audio_url,
+    raw_voice_url: rec.raw_voice_url,
+  } : null;
+}
+
+export async function getRecordingByIdForStatus(id: string): Promise<Pick<Recording, 'id' | 'slug' | 'user_id' | 'processing_state' | 'processing_progress' | 'processing_error'> | null> {
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data } = await supabase
+        .from('recordings')
+        .select('id, slug, user_id, processing_state, processing_progress, processing_error')
+        .eq('id', id)
+        .maybeSingle();
+      return (data as any) || null;
+    } catch { return null; }
+  }
+  const store = readLocalStore();
+  const rec = store.recordings.find((r) => r.id === id);
+  return rec ? {
+    id: rec.id,
+    slug: rec.slug,
+    user_id: rec.user_id,
+    processing_state: rec.processing_state,
+    processing_progress: rec.processing_progress,
+    processing_error: rec.processing_error,
+  } : null;
+}
+
+export async function updateRecordingProcessing(
+  id: string,
+  patch: Pick<Recording, 'processing_state' | 'processing_progress' | 'processing_error' | 'processing_started_at' | 'processing_completed_at' | 'processed_audio_url' | 'duration_seconds'> & Partial<Pick<Recording, 'processed_storage_key'>>
+): Promise<void> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    const { error } = await supabase.from('recordings').update(patch).eq('id', id);
+    if (error) throw new Error(`Recording processing state could not be updated: ${error.message}`);
+    return;
+  }
+  const store = readLocalStore();
+  const index = store.recordings.findIndex((r) => r.id === id);
+  if (index >= 0) {
+    store.recordings[index] = { ...store.recordings[index], ...patch };
+    writeLocalStore(store);
+  }
+}
+
+export async function savePurchase(input: {
+  stripe_session_id: string;
+  stripe_event_id?: string | null;
+  user_id?: string | null;
+  customer_email?: string | null;
+  plan_id?: string | null;
+  status: 'pending' | 'paid' | 'failed' | 'refunded';
+  amount_cents?: number | null;
+  currency?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!isSupabaseServerConfigured()) {
+    if (!localFallbackAllowed()) throw new Error('Supabase is required for payment entitlements in production.');
+    patchLocalStore('purchases', (rows) => ({ ...(rows || {}), [input.stripe_session_id]: input }));
+    return;
+  }
+  const supabase = getServiceSupabase();
+  const { error } = await supabase.from('purchases').upsert({
+    ...input,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'stripe_session_id' });
+  if (error) throw new Error(`Purchase could not be saved: ${error.message}`);
+}
+
+export async function getPurchaseBySession(sessionId: string): Promise<{ status: string; plan_id?: string | null } | null> {
+  if (!isSupabaseServerConfigured()) {
+    if (!localFallbackAllowed()) throw new Error('Supabase is required for payment verification in production.');
+    const rows = (readLocalStore() as any).purchases || {};
+    return rows[sessionId] || null;
+  }
+  const supabase = getServiceSupabase();
+  const { data } = await supabase.from('purchases').select('status, plan_id').eq('stripe_session_id', sessionId).maybeSingle();
+  return data || null;
+}
+
+export async function saveTranscript(input: {
+  recordingId: string;
+  words: import('@/types').TranscriptWord[];
+  isPubliclyVisible?: boolean;
+  provider?: string | null;
+}): Promise<void> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    const { error } = await supabase.from('record_transcripts').upsert({
+      recording_id: input.recordingId,
+      words: input.words,
+      is_publicly_visible: input.isPubliclyVisible ?? false,
+      provider: input.provider ?? null,
+    }, { onConflict: 'recording_id' });
+    if (error) throw new Error(`Transcript could not be saved: ${error.message}`);
+    return;
+  }
+  patchLocalStore('recordTranscripts', (rows) => ({ ...(rows || {}), [input.recordingId]: input.words }));
 }
 
 export async function saveRecording(recording: Recording): Promise<Recording> {

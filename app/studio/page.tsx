@@ -15,10 +15,12 @@ import { LatheProcessingModal } from '@/components/studio/LatheProcessingModal';
 import { StripeUpgradeModal } from '@/components/studio/StripeUpgradeModal';
 import { Button } from '@/components/ui/Button';
 import { 
-  FilterPresetType, 
-  VinylStyleType, 
-  AudioAsset, 
-  PricingPlan 
+  FilterPresetType,
+  VinylStyleType,
+  AudioAsset,
+  PricingPlan,
+  OccasionType,
+  OCCASIONS,
 } from '@/types';
 import { 
   DEFAULT_AUDIO_ASSETS, 
@@ -55,6 +57,11 @@ function StudioContent() {
   // Metadata
   const [title, setTitle] = useState<string>('My Heartfelt Voice Note');
   const [recipientName, setRecipientName] = useState<string>('');
+  const [occasion, setOccasion] = useState<OccasionType>('something_else');
+  const [dedication, setDedication] = useState('');
+  const [occasionDate, setOccasionDate] = useState('');
+  const [sideALabel, setSideALabel] = useState('Side A · Your voice');
+  const [sideBLabel, setSideBLabel] = useState('Side B · The rest of the story');
   const [senderName, setSenderName] = useState<string>('');
 
   // Audio & Vinyl Settings
@@ -152,91 +159,119 @@ function StudioContent() {
   const maxDuration = currentPlan?.max_duration_seconds || 60;
   const isOverDurationLimit = !isPremium && recordedDuration > maxDuration;
 
-  // Submit to Server-Side Audio Engine
+  // Submit to the direct-upload + async processing pipeline. The browser
+  // uploads bytes directly to R2 (or the signed local fallback), then this
+  // lightweight request creates the durable job. No FFmpeg runs in Vercel.
   const handleSubmitAndPressWax = async () => {
     if (!audioBlob) {
       toast.error('Please record or upload your voice note first.');
       return;
     }
-
     if (!title.trim()) {
       toast.error('Please give your memory a title.');
       return;
     }
 
-    let stepInterval: ReturnType<typeof setInterval> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     try {
       setIsSubmitting(true);
       setIsProcessingModalOpen(true);
       setLatheStepIndex(0);
 
-      // Prepare payload
-      const formData = new FormData();
-      const sourceName = audioBlob instanceof File ? audioBlob.name : audioBlob.type.includes('mp4') ? 'voice.m4a' : 'voice.webm';
-      formData.append('audio', audioBlob, sourceName);
-      formData.append('title', title.trim());
-      formData.append('recipientName', recipientName.trim());
-      formData.append('senderName', senderName.trim());
-      formData.append('filterPreset', filterPreset);
-      formData.append('crackleIntensity', crackleIntensity.toString());
-      formData.append('bgMusicId', selectedBgMusicId || 'none');
-      formData.append('bgMusicVolume', bgMusicVolume.toString());
-      formData.append('crackleAssetId', crackleAssetId || 'default');
-      formData.append('hissIntensity', hissIntensity.toString());
-      formData.append('rumbleIntensity', rumbleIntensity.toString());
-      formData.append('soundEffectId', soundEffectId || 'none');
-      formData.append('soundEffectVolume', soundEffectVolume.toString());
-      formData.append('musicClarity', musicClarity.toString());
-      formData.append('crackleBrightness', crackleBrightness.toString());
-      formData.append('voiceWarmth', voiceWarmth.toString());
-      formData.append('voicePresence', voicePresence.toString());
-      formData.append('wowFlutter', wowFlutter.toString());
-      formData.append('introDelay', introDelay.toString());
-      formData.append('vinylStyle', vinylStyle);
-      // Tell the engine the plan ceiling so a runaway upload can't be mastered.
-      formData.append('maxSeconds', String(maxDuration + 5));
+      const recordId = crypto.randomUUID();
+      const sourceName = audioBlob instanceof File
+        ? audioBlob.name
+        : audioBlob.type.includes('mp4') ? 'voice.m4a' : 'voice.webm';
+      const contentType = audioBlob.type || (sourceName.endsWith('.m4a') ? 'audio/mp4' : 'audio/webm');
 
-      // Progress animation simulation while waiting for API
-      stepInterval = setInterval(() => {
-        setLatheStepIndex((prev) => {
-          if (prev < 3) return prev + 1;
-          return prev;
-        });
-      }, 1200);
-
-      const res = await fetch('/api/audio/process', {
+      // 1. Request a one-time upload capability. The response contains no R2
+      // credentials and is scoped to this record id + file type + max bytes.
+      const intentRes = await fetch('/api/audio/upload-url', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordId,
+          filename: sourceName,
+          contentType,
+          size: audioBlob.size,
+        }),
       });
+      const intent = await intentRes.json();
+      if (!intentRes.ok) throw new Error(intent.error || 'Could not prepare the upload.');
 
-      clearInterval(stepInterval);
-      stepInterval = null;
+      setLatheStepIndex(1);
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Audio processing failed');
-      }
+      // 2. Upload the bytes directly. R2 mode uses a presigned PUT; local mode
+      // uses the same PUT contract against the signed confirmation route.
+      const uploadRes = await fetch(intent.uploadUrl, {
+        method: 'PUT',
+        headers: intent.headers,
+        body: audioBlob,
+      });
+      const uploaded = await uploadRes.json().catch(() => ({}));
+      if (!uploadRes.ok) throw new Error(uploaded.error || 'The recording upload failed.');
+
+      setLatheStepIndex(2);
+
+      // 3. Create the lightweight DB row + durable audio_master job.
+      const queueRes = await fetch('/api/audio/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordId,
+          originalStorageKey: intent.key,
+          originalUrl: uploaded.url || null,
+          originalContentType: contentType,
+          title: title.trim(),
+          recipientName: recipientName.trim(),
+          senderName: senderName.trim(),
+          occasion,
+          filterPreset,
+          crackleIntensity,
+          bgMusicId: selectedBgMusicId || 'none',
+          vinylStyle,
+          maxSeconds: maxDuration + 5,
+          durationSeconds: recordedDuration,
+          dedication: dedication.trim(),
+          occasionDate,
+          sideALabel: sideALabel.trim(),
+          sideBLabel: sideBLabel.trim(),
+        }),
+      });
+      const queued = await queueRes.json();
+      if (!queueRes.ok) throw new Error(queued.error || 'Could not queue your record.');
 
       setLatheStepIndex(3);
-      const data = await res.json();
+      toast.success('Your record is being pressed…', { duration: 4000 });
 
-      const engine = data?.engine;
-      const engineNote = engine
-        ? ` · ${engine.mix?.bgMusic ? 'ambience ' : ''}${engine.mix?.crackle ? 'crackle ' : ''}mixed, ${engine.durationSeconds?.toFixed?.(1) ?? '?'}s`
-        : '';
-
-      setTimeout(() => {
-        setIsProcessingModalOpen(false);
-        toast.success(`✨ Master wax pressed${engineNote}`, { duration: 5000 });
-        confetti({ particleCount: 100, spread: 80, origin: { y: 0.5 } });
-        router.push(`/play/${data.slug}`);
-      }, 1000);
+      // 4. Poll only tiny JSON status. The worker updates the row; when it
+      // completes we navigate to the finished share page.
+      pollTimer = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/processing/status/${encodeURIComponent(recordId)}`, { cache: 'no-store' });
+          const status = await statusRes.json();
+          const state = status?.recording?.state;
+          if (state === 'completed') {
+            if (pollTimer) clearInterval(pollTimer);
+            setIsProcessingModalOpen(false);
+            setIsSubmitting(false);
+            confetti({ particleCount: 100, spread: 80, origin: { y: 0.5 } });
+            router.push(`/play/${queued.slug}`);
+          } else if (state === 'failed') {
+            if (pollTimer) clearInterval(pollTimer);
+            setIsProcessingModalOpen(false);
+            setIsSubmitting(false);
+            toast.error(status?.recording?.error || 'The press failed. You can try again.');
+          }
+        } catch {
+          // A transient poll failure should not cancel a durable job.
+        }
+      }, 2500);
     } catch (err: any) {
+      if (pollTimer) clearInterval(pollTimer);
       setIsProcessingModalOpen(false);
       setIsSubmitting(false);
-      toast.error(err.message || 'Failed to press digital wax record.');
-    } finally {
-      if (stepInterval) clearInterval(stepInterval);
+      toast.error(err?.message || 'Could not press the record.');
     }
   };
 
@@ -248,7 +283,7 @@ function StudioContent() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/60 border border-amber-600/30 text-amber-300 text-xs font-mono">
               <Music2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>Studio · 3D Anime Turntable</span>
+              <span>Studio · Realistic 3D Turntable</span>
             </span>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-stone-700 text-stone-300 text-xs font-mono">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
@@ -348,6 +383,31 @@ function StudioContent() {
 
             <div className="space-y-4">
               <div>
+                <label className="block text-xs font-serif text-stone-300 mb-2 font-semibold">
+                  What are you creating?
+                </label>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  {OCCASIONS.map((item) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      onClick={() => setOccasion(item.id)}
+                      className={`rounded-xl border px-2 py-2 text-left text-[11px] transition-colors ${
+                        occasion === item.id
+                          ? 'border-amber-500 bg-amber-950/60 text-amber-200'
+                          : 'border-stone-700 bg-stone-950 text-stone-400 hover:border-amber-700/60 hover:text-amber-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs italic text-stone-500">
+                  {OCCASIONS.find((item) => item.id === occasion)?.prompt}
+                </p>
+              </div>
+
+              <div>
                 <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">
                   Memory Title (Engraved on Center Disc)
                 </label>
@@ -358,6 +418,26 @@ function StudioContent() {
                   placeholder="e.g. Our 50th Anniversary Letter"
                   className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Dedication (optional)</label>
+                <textarea value={dedication} onChange={(e) => setDedication(e.target.value)} rows={2} maxLength={1000} placeholder="A line they can read before the needle drops…" className="w-full resize-none rounded-xl border border-stone-700 bg-stone-950 px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500" />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Date</label>
+                  <input type="date" value={occasionDate} onChange={(e) => setOccasionDate(e.target.value)} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side A label</label>
+                  <input value={sideALabel} onChange={(e) => setSideALabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side B label</label>
+                  <input value={sideBLabel} onChange={(e) => setSideBLabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -1,0 +1,17 @@
+{
+  "name": "vynyl-record-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx worker.ts",
+    "start": "node --experimental-strip-types worker.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.4"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.3.3"
+  }
+}
