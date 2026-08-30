@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createCheckoutSession } from '@/lib/stripe';
-import { getPricingPlans } from '@/lib/db';
+import { getPricingPlans, getPurchaseBySession } from '@/lib/db';
 import { isStripeConfigured, stripe } from '@/lib/stripe';
 
 export async function GET(req: NextRequest) {
@@ -28,7 +28,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Payment has not been completed.' }, { status: 402 });
     }
 
-    return NextResponse.json({ verified: true, planId: plan.id });
+    // Stripe itself is the authoritative checkout verification. The webhook
+    // separately upserts the durable `purchases` entitlement row; if it has
+    // already arrived, expose that server-side status too.
+    const purchase = await getPurchaseBySession(session.id).catch(() => null);
+    return NextResponse.json({
+      verified: true,
+      planId: plan.id,
+      entitlement: purchase?.status === 'paid' ? 'paid' : 'pending_webhook',
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Checkout verification failed.' }, { status: 400 });
   }

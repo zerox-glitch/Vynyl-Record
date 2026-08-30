@@ -518,6 +518,41 @@ export async function updateRecordingProcessing(
   }
 }
 
+export async function savePurchase(input: {
+  stripe_session_id: string;
+  stripe_event_id?: string | null;
+  user_id?: string | null;
+  customer_email?: string | null;
+  plan_id?: string | null;
+  status: 'pending' | 'paid' | 'failed' | 'refunded';
+  amount_cents?: number | null;
+  currency?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!isSupabaseServerConfigured()) {
+    if (!localFallbackAllowed()) throw new Error('Supabase is required for payment entitlements in production.');
+    patchLocalStore('purchases', (rows) => ({ ...(rows || {}), [input.stripe_session_id]: input }));
+    return;
+  }
+  const supabase = getServiceSupabase();
+  const { error } = await supabase.from('purchases').upsert({
+    ...input,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'stripe_session_id' });
+  if (error) throw new Error(`Purchase could not be saved: ${error.message}`);
+}
+
+export async function getPurchaseBySession(sessionId: string): Promise<{ status: string; plan_id?: string | null } | null> {
+  if (!isSupabaseServerConfigured()) {
+    if (!localFallbackAllowed()) throw new Error('Supabase is required for payment verification in production.');
+    const rows = (readLocalStore() as any).purchases || {};
+    return rows[sessionId] || null;
+  }
+  const supabase = getServiceSupabase();
+  const { data } = await supabase.from('purchases').select('status, plan_id').eq('stripe_session_id', sessionId).maybeSingle();
+  return data || null;
+}
+
 export async function saveTranscript(input: {
   recordingId: string;
   words: import('@/types').TranscriptWord[];
