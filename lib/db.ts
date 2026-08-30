@@ -437,6 +437,32 @@ export async function getRecordingBySlug(slug: string, viewer: Viewer = { kind: 
   return VISIBLE_TO_VIEWER(rec, viewer) ? rec : null;
 }
 
+export async function getRecordingForAudioFilename(filename: string): Promise<Pick<Recording, 'id' | 'visibility' | 'processed_audio_url' | 'raw_voice_url'> | null> {
+  const needle = filename.split('?')[0];
+  if (isSupabaseServerConfigured()) {
+    try {
+      const supabase = getServiceSupabase();
+      const { data } = await supabase
+        .from('recordings')
+        .select('id, visibility, processed_audio_url, raw_voice_url')
+        .or(`processed_audio_url.ilike.%${needle}%,raw_voice_url.ilike.%${needle}%`)
+        .limit(1)
+        .maybeSingle();
+      return (data as any) || null;
+    } catch { return null; }
+  }
+  const store = readLocalStore();
+  const rec = store.recordings.find((r) =>
+    r.processed_audio_url.includes(needle) || r.raw_voice_url.includes(needle)
+  );
+  return rec ? {
+    id: rec.id,
+    visibility: rec.visibility,
+    processed_audio_url: rec.processed_audio_url,
+    raw_voice_url: rec.raw_voice_url,
+  } : null;
+}
+
 export async function getRecordingByIdForStatus(id: string): Promise<Pick<Recording, 'id' | 'slug' | 'user_id' | 'processing_state' | 'processing_progress' | 'processing_error'> | null> {
   if (isSupabaseServerConfigured()) {
     try {
