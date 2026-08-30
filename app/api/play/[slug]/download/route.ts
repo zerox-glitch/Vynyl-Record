@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { slug: string } }
 ) {
   try {
@@ -26,7 +26,10 @@ export async function GET(
       if (!encoded) throw new Error('Stored audio data is invalid.');
       audio = Buffer.from(encoded, 'base64');
     } else {
-      const response = await fetch(recording.processed_audio_url, { cache: 'no-store' });
+      const sourceUrl = recording.processed_audio_url.startsWith('/')
+        ? new URL(recording.processed_audio_url, request.url).toString()
+        : recording.processed_audio_url;
+      const response = await fetch(sourceUrl, { cache: 'no-store' });
       if (!response.ok) throw new Error('Stored audio file is unavailable.');
       audio = new Uint8Array(await response.arrayBuffer());
     }
