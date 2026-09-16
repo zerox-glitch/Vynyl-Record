@@ -165,6 +165,7 @@ export async function completeJob(jobId: string, result: ProcessingJob['result']
         state: 'completed',
         completed_at: now,
         result,
+        error: null,
         last_heartbeat_at: now,
       }).eq('id', jobId);
       return;
@@ -176,6 +177,7 @@ export async function completeJob(jobId: string, result: ProcessingJob['result']
     job.state = 'completed';
     job.completed_at = now;
     job.result = result;
+    delete job.error;
     job.last_heartbeat_at = now;
     patchLocalStore('processingJobs', () => s.processingJobs);
   }

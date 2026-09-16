@@ -85,7 +85,7 @@ function r2Endpoint(accountId: string): string {
  * the project we can swap this for its presigner.
  */
 async function presignR2(args: {
-  method: 'GET' | 'PUT';
+  method: 'GET' | 'PUT' | 'DELETE';
   bucket: string;
   accountId: string;
   accessKeyId: string;
@@ -199,6 +199,16 @@ export function buildRecordKey(input: {
   return `users/${safeUserId}/records/${safeRecordId}/${input.variant}/${safeName}`;
 }
 
+/** Private, durable object path for reusable admin-managed audio assets. */
+export function buildAudioAssetKey(input: { assetId: string; filename: string }): string {
+  const safeAssetId = sanitize(input.assetId);
+  const safeName = sanitize(input.filename);
+  if (!safeAssetId || !safeName) throw new Error('Invalid audio asset key');
+  // Prefix the basename as well as the directory so the local/dev flat-file
+  // adapter cannot collide when two assets share an original filename.
+  return `audio-assets/${safeAssetId}/source/${safeAssetId}-${safeName}`;
+}
+
 function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -294,10 +304,22 @@ function buildR2Storage(): StorageOperations {
     },
 
     async deleteObject(key): Promise<void> {
-      // R2 requires the SDK for signed DELETE; fall back to admin endpoint.
-      // For now we rely on TTL/lifecycle rules and skip implementation here
-      // — add the SDK-backed deleter when we wire heavy deletions.
-      void key;
+      const url = await presignR2({
+        method: 'DELETE',
+        bucket,
+        accountId,
+        accessKeyId,
+        secretAccessKey,
+        region,
+        key,
+        ttlSeconds: 300,
+      });
+      const res = await fetch(url, { method: 'DELETE' });
+      // S3/R2 deletion is idempotent; 404 means the desired state already exists.
+      if (!res.ok && res.status !== 404) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`R2 delete failed (${res.status}): ${text || res.statusText}`);
+      }
     },
 
     async signedUploadUrl(key, contentType, ttlSeconds = 600): Promise<UploadUrl> {
@@ -364,7 +386,7 @@ function buildLocalStorage(): StorageOperations {
       };
     },
     async getObject(key): Promise<ObjectBody | null> {
-      const target = path.join(root, key);
+      const target = path.join(root, path.basename(key));
       try {
         const stat = fs.statSync(target);
         const buf = fs.readFileSync(target);
@@ -376,7 +398,7 @@ function buildLocalStorage(): StorageOperations {
       } catch { return null; }
     },
     async deleteObject(key) {
-      try { fs.unlinkSync(path.join(root, key)); } catch {}
+      try { fs.unlinkSync(path.join(root, path.basename(key))); } catch {}
     },
     async signedUploadUrl(key, contentType, ttlSeconds = 600): Promise<UploadUrl> {
       const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
@@ -391,7 +413,7 @@ function buildLocalStorage(): StorageOperations {
     async signedDownloadUrl(key, ttlSeconds = 600): Promise<DownloadUrl> {
       const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
       return {
-        url: `/api/audio/download-url/local-debug?key=${encodeURIComponent(key)}`,
+        url: `/api/records/${encodeURIComponent(path.basename(key))}`,
         expiresAt,
       };
     },

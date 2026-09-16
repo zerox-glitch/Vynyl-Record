@@ -8,6 +8,8 @@
     "prebuild": "node scripts/generate_audio_assets.js",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
+    "worker": "tsx worker/worker.ts",
+    "test:audio-presets": "tsx scripts/test_vinyl_presets.ts",
     "lint": "next lint"
   },
   "dependencies": {
@@ -47,6 +49,7 @@
     "@types/react-dom": "^18.3.5",
     "@types/three": "^0.160.0",
     "@types/uuid": "^10.0.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.3.3"
   }
 }

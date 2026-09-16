@@ -4,6 +4,8 @@ import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
 import { FilterPresetType } from '@/types';
+import { type VinylPreset } from './presets';
+import { buildMasterFilterGraph } from './chain';
 
 /* ------------------------------------------------------------------ *
  * Binary resolution                                                  *
@@ -129,7 +131,6 @@ function estimateFromSize(filePath: string): number {
   }
 }
 
-/** Kept for admin/preview callers that only need a number. */
 export async function getAudioDuration(filePath: string): Promise<number> {
   const dur = await probeDurationSeconds(filePath);
   return dur > 0 ? dur : 10;
@@ -162,9 +163,13 @@ export function getMixLevels(crackleIntensity: number): MixLevels {
   };
 }
 
+/** Kept for compatibility with the Studio UI: maps the legacy four
+ * FilterPresetType values to a numeric depth used by the simple graph. */
 export interface AudioProcessingOptions {
   voiceFilePath: string;
   outputFilePath: string;
+  /** legacy filter preset (clean/gramophone/radio/tape); used only as a
+   *  loose hint when the caller has not provided a VinylPreset. */
   filterPreset: FilterPresetType;
   crackleIntensity: number;
   bgMusicFilePath?: string | null;
@@ -178,7 +183,6 @@ export type MixStrategy = 'stream-loop' | 'aloop' | 'voice-and-crackle' | 'voice
 export interface AudioProcessResult {
   durationSeconds: number;
   outputFilePath: string;
-  /** `mp3` when we transcoded; `source` when the upload was copied verbatim. */
   container: 'mp3' | 'source';
   strategy: MixStrategy;
   mix: {
@@ -186,20 +190,15 @@ export interface AudioProcessResult {
     bgMusic: boolean;
     crackle: boolean;
     filterPreset: FilterPresetType;
-    /** dBFS mean of the master, measured by the engine (0 when unavailable). */
     levels: MixLevels | null;
   };
 }
 
 interface AttemptConfig {
   strategy: MixStrategy;
-  /** loop the extra inputs with the `-stream_loop` input option (preferred) */
   useStreamLoop: boolean;
-  /** include the background track */
   withBg: boolean;
-  /** include the crackle bed */
   withCrackle: boolean;
-  /** add alimiter + head/tail fades (skipped for ancient builds) */
   polish: boolean;
 }
 
@@ -258,9 +257,6 @@ export async function processAudioTrack(options: AudioProcessingOptions): Promis
   for (const attempt of ATTEMPTS) {
     const useBg = hasBg && attempt.withBg;
     const useCrackle = hasCrackle && attempt.withCrackle;
-    if (!useBg && !useCrackle && attempt.strategy !== 'voice-only') {
-      // Voice-only variants are still worth running, everything else is a no-op.
-    }
 
     try {
       const result = await runMix({
@@ -489,7 +485,6 @@ async function passthrough(
 
 /* ------------------------------------------------------------------ *
  * Raw take + helpers used by the API route                           */
-/* ------------------------------------------------------------------ *
 
 /**
  * Convert the uploaded recording (webm/opus, m4a, wav…) into a small MP3 so
@@ -521,7 +516,6 @@ export async function transcodeToMp3(inputFilePath: string, outputFilePath: stri
   });
 }
 
-/** Where temp files live: /tmp on serverless, a scratch dir locally. */
 export function audioScratchDir(): string {
   const dir = path.join(os.tmpdir(), 'vynyl_tmp');
   try {
@@ -531,3 +525,130 @@ export function audioScratchDir(): string {
     return os.tmpdir();
   }
 }
+
+/**
+ * Materialize an admin-selected source section before it reaches the mixer.
+ * This stays in the persistent worker: uploads remain fast and the source in
+ * R2 remains non-destructive, while only the chosen cut can loop in a master.
+ */
+export async function trimAudioSegment(options: {
+  inputFilePath: string;
+  outputFilePath: string;
+  startSeconds: number;
+  endSeconds: number;
+}): Promise<string> {
+  const start = Math.max(0, Number(options.startSeconds) || 0);
+  const end = Math.max(start + 0.1, Number(options.endSeconds) || start + 0.1);
+  const length = end - start;
+  if (fs.existsSync(options.outputFilePath)) fs.unlinkSync(options.outputFilePath);
+
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg(options.inputFilePath)
+      .inputOptions(['-nostdin', '-vn', '-ss', start.toFixed(3)])
+      .outputOptions(['-nostdin', '-vn', '-t', length.toFixed(3), '-ac', '2', '-ar', '44100'])
+      .audioCodec('pcm_s16le')
+      .output(options.outputFilePath)
+      .on('end', () => {
+        if (!fs.existsSync(options.outputFilePath) || fs.statSync(options.outputFilePath).size < 512) {
+          reject(new Error('The selected background section produced no audio.'));
+          return;
+        }
+        resolve();
+      })
+      .on('error', (error, _stdout, stderr) => {
+        const tail = String(stderr || '').trim().split('\n').slice(-2).join(' | ');
+        reject(new Error(`Background trim failed: ${error.message}${tail ? ` :: ${tail}` : ''}`));
+      })
+      .run();
+  });
+  return options.outputFilePath;
+}
+
+/**
+ * High-level "press the wax": voice + optional bg music + optional vinyl bed
+ * -> a final mastered mp3 using the given VinylPreset recipe. The whole chain
+ * runs deterministically per recording id (when the preset calls for it),
+ * is bounded to maxSeconds, and never executes long FFmpeg work in the
+ * Vercel function browser path.
+ *
+ * Returns the path to the rendered master so the caller (the persistent
+ * worker) can upload it to R2 and update the recording row.
+ */
+export interface PressOptions {
+  /** Existing voice master. May be the recorded .webm or a normalised .wav. */
+  voiceFilePath: string;
+  /** Optional background ambience file (a single bed). */
+  bgMusicFilePath?: string | null;
+  /** Mix level selected in Studio or inherited from the asset default. */
+  bgMusicGain?: number;
+  /** Optional pre-rendered bed file. If absent, one is synthesised first. */
+  vinylBedFilePath?: string | null;
+  outputFilePath: string;
+  preset: VinylPreset;
+  /** Max length (s). */
+  maxSeconds?: number;
+}
+
+export async function pressVinylMaster(options: PressOptions): Promise<{ outputFilePath: string; durationSeconds: number }> {
+  const { voiceFilePath, outputFilePath, preset } = options;
+  const maxSeconds = options.maxSeconds ?? 600;
+  const probed = await probeDurationSeconds(voiceFilePath);
+  const durationSeconds = Math.max(0.6, Math.min(
+    Number.isFinite(probed) && probed > 0 ? probed : 10,
+    maxSeconds,
+  ));
+
+  if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath);
+
+  const graph = buildMasterFilterGraph(
+    preset,
+    { voice: voiceFilePath, bg: options.bgMusicFilePath || null, bed: options.vinylBedFilePath || null },
+    { voiceDuration: durationSeconds, bgMusicGain: options.bgMusicGain },
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    let cmd = ffmpeg().input(voiceFilePath).inputOptions(['-nostdin', '-vn']);
+    if (options.bgMusicFilePath) {
+      cmd = cmd.input(options.bgMusicFilePath).inputOptions(
+        ['-nostdin', '-vn', '-stream_loop', '-1', '-t', durationSeconds.toFixed(3)]
+      );
+    }
+    if (options.vinylBedFilePath) {
+      cmd = cmd.input(options.vinylBedFilePath).inputOptions(
+        ['-nostdin', '-vn', '-stream_loop', '-1', '-t', durationSeconds.toFixed(3)]
+      );
+    }
+    cmd
+      .complexFilter(graph, 'vynyl_mix')
+      .outputOptions([
+        '-nostdin', '-threads', '2', '-vn',
+        '-map_metadata', '-1',
+        '-t', durationSeconds.toFixed(3),
+      ])
+      .audioCodec('libmp3lame')
+      .audioBitrate(192)
+      .audioChannels(2)
+      .audioFrequency(44100)
+      .output(outputFilePath)
+      .on('start', (c) => console.log('[VynylMaster] cmd:', c.replace(/\s+/g, ' ').slice(0, 360)))
+      .on('end', async () => {
+        try {
+          if (!fs.existsSync(outputFilePath) || fs.statSync(outputFilePath).size < 2048) {
+            return reject(new Error('pressVinylMaster produced no output'));
+          }
+        } finally {
+          resolve();
+        }
+      })
+      .on('error', (err, _stdout, stderr) => {
+        const tail = String(stderr || '').trim().split('\n').slice(-2).join(' | ');
+        reject(new Error(`${err.message}${tail ? ` :: ${tail}` : ''}`));
+      })
+      .run();
+  });
+
+  return { outputFilePath, durationSeconds };
+}
+
+/* Forward-compatibility export. */
+export type { VinylPreset };

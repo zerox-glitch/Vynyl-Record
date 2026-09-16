@@ -26,6 +26,7 @@ improves behaviour when set, but does not block the app.
 - The record_events table (analytics funnel: write-only from server)
 - The record_transcripts table (Whisper payloads)
 - The purchases table (Stripe webhook idempotency)
+- Reusable audio-asset metadata, R2 object keys, and non-destructive trim points
 
 ## What the app does NOT use Supabase for
 
@@ -79,7 +80,7 @@ public-side tables.
 
 ## What Supabase must run manually
 
-- Paste the contents of `SUPABASE_SETUP.sql` into Supabase SQL Editor and run it once. The script is idempotent (uses `IF NOT EXISTS`, `ON CONFLICT`, `DO $$ ... EXCEPTION WHEN OTHERS THEN NULL; END $$;`).
+- Paste the contents of `SUPABASE_SETUP.sql` into Supabase SQL Editor and run it once. The script is idempotent (uses `IF NOT EXISTS`, `ON CONFLICT`, `DO $$ ... EXCEPTION WHEN OTHERS THEN NULL; END $$;`). This includes the audio-asset storage/trim fields from migration `00009`.
 - In **Authentication → Providers**, enable **Email** (and **Email confirm** for production).
 - In **Authentication → URL Configuration**, add `${NEXT_PUBLIC_APP_URL}/login` to Site URL and Redirect URLs.
 - If you want the auto-unblock of stuck processing jobs, enable `pg_cron` in **Database → Extensions** and run once:

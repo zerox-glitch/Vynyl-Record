@@ -1,17 +1,9 @@
 {
-  "name": "vynyl-record-worker",
+  "name": "vynyl-record-worker-entrypoint",
   "private": true,
-  "version": "1.0.0",
-  "type": "module",
+  "version": "1.1.0",
+  "description": "Entrypoint metadata; deploy from the repository root and run npm run worker.",
   "scripts": {
-    "dev": "tsx worker.ts",
-    "start": "node --experimental-strip-types worker.ts"
-  },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.112.4"
-  },
-  "devDependencies": {
-    "tsx": "^4.19.2",
-    "typescript": "^5.3.3"
+    "start": "cd .. && npm run worker"
   }
 }

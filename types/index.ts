@@ -60,11 +60,21 @@ export interface AudioAsset {
   id: string;
   title: string;
   category: AudioCategory;
+  /** Stable playback route. Uploaded objects themselves stay private in R2. */
   file_url: string;
+  /** R2/local object key for admin-uploaded assets; bundled assets leave this null. */
+  storage_key?: string | null;
+  source_content_type?: string | null;
+  source_size_bytes?: number | null;
   is_premium_only: boolean;
   is_enabled?: boolean;
   default_volume?: number;
   created_at: string;
+  /** Browser-probed source duration and the non-destructive section used in masters. */
+  duration_seconds?: number | null;
+  trim_start_seconds?: number;
+  trim_end_seconds?: number | null;
+  /** Legacy duration field retained for bundled sound effects. */
   duration?: number;
 }
 

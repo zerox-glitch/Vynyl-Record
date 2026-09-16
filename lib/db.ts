@@ -303,15 +303,33 @@ export async function getAudioAssets(): Promise<AudioAsset[]> {
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
-      const { data } = await supabase.from('audio_assets').select('*').order('created_at', { ascending: false });
-      if (data && data.length > 0) return data as AudioAsset[];
+      const { data, error } = await supabase.from('audio_assets').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+      // An empty production table is still authoritative. Falling through to
+      // bundled demo rows made an upload appear to vanish between requests.
+      return (data || []) as AudioAsset[];
     } catch (err) {
-      console.warn('Supabase audio_assets fallback:', err);
+      console.warn('Supabase audio_assets error:', err);
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('The audio asset database is unavailable. Check the Supabase configuration and schema.');
+      }
     }
   }
 
   const store = readLocalStore();
   return store.audioAssets;
+}
+
+export async function getAudioAssetById(id: string): Promise<AudioAsset | null> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    const { data, error } = await supabase.from('audio_assets').select('*').eq('id', id).maybeSingle();
+    if (error) throw new Error(`Audio asset could not be loaded: ${error.message}`);
+    return (data as AudioAsset | null) || null;
+  }
+
+  const store = readLocalStore();
+  return store.audioAssets.find((asset) => asset.id === id) || null;
 }
 
 export async function updateAudioAsset(id: string, updates: Partial<AudioAsset>): Promise<AudioAsset | null> {

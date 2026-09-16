@@ -57,8 +57,10 @@ export async function POST(req: NextRequest) {
     const senderName = safeText(body?.senderName, 120);
     const occasion = safeText(body?.occasion, 40) as OccasionType;
     const filterPreset = (safeText(body?.filterPreset, 30) || 'gramophone') as FilterPresetType;
+    const vinylPresetId = safeText(body?.vinylPresetId, 40) || null;
     const vinylStyle = (safeText(body?.vinylStyle, 40) || 'classic_red') as VinylStyleType;
     const crackleIntensity = safeNumber(body?.crackleIntensity, 0.22, 0, 1);
+    const bgMusicVolume = safeNumber(body?.bgMusicVolume, 0.18, 0, 0.8);
     const maxSeconds = Math.round(safeNumber(body?.maxSeconds, 600, 5, 1800));
     const durationSeconds = safeNumber(body?.durationSeconds, 0, 0, maxSeconds);
 
@@ -101,8 +103,10 @@ export async function POST(req: NextRequest) {
         originalContentType,
         title,
         filterPreset,
+        vinylPresetId,
         crackleIntensity,
         bgMusicId: safeText(body?.bgMusicId, 120) || null,
+        bgMusicVolume,
         vinylStyle,
         maxSeconds,
       },

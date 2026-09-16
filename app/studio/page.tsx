@@ -7,6 +7,7 @@ import { Navbar } from '@/components/ui/Navbar';
 import { Footer } from '@/components/ui/Footer';
 import { AudioRecorder } from '@/components/studio/AudioRecorder';
 import { FilterSelector } from '@/components/studio/FilterSelector';
+import { VinylPresetSelector } from '@/components/studio/VinylPresetSelector';
 import { BackgroundMusicSelector } from '@/components/studio/BackgroundMusicSelector';
 import { CrackleSlider } from '@/components/studio/CrackleSlider';
 import { AnalogMixerControls } from '@/components/studio/AnalogMixerControls';
@@ -26,6 +27,7 @@ import {
   DEFAULT_AUDIO_ASSETS, 
   DEFAULT_PRICING_PLANS 
 } from '@/lib/constants';
+import { DEFAULT_VINYL_PRESET_ID, type VinylPreset } from '@/lib/audio/presets';
 import { Disc3, Send, Crown, User, Heart, Mic2, Sparkles, Music2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
@@ -66,6 +68,7 @@ function StudioContent() {
 
   // Audio & Vinyl Settings
   const [filterPreset, setFilterPreset] = useState<FilterPresetType>('gramophone');
+  const [vinylPresetId, setVinylPresetId] = useState<VinylPreset['id']>(DEFAULT_VINYL_PRESET_ID);
   const [selectedBgMusicId, setSelectedBgMusicId] = useState<string | null>('a2222222-2222-2222-2222-222222222222');
   const [crackleIntensity, setCrackleIntensity] = useState<number>(0.15);
   const [crackleAssetId, setCrackleAssetId] = useState<string | null>(null);
@@ -119,14 +122,16 @@ function StudioContent() {
 
   // Load Audio Assets & Pricing Plans
   useEffect(() => {
-    fetch('/api/audio/upload-asset')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.assets && data.assets.length > 0) {
-          setAudioAssets(data.assets);
-        }
+    fetch('/api/audio/upload-asset', { cache: 'no-store' })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Audio assets could not be loaded.');
+        return data;
       })
-      .catch(() => {});
+      .then((data) => {
+        if (Array.isArray(data.assets)) setAudioAssets(data.assets);
+      })
+      .catch((error) => console.warn('[Studio] audio assets unavailable:', error));
 
     fetch('/api/pricing')
       .then((res) => res.json())
@@ -227,8 +232,10 @@ function StudioContent() {
           senderName: senderName.trim(),
           occasion,
           filterPreset,
+          vinylPresetId,
           crackleIntensity,
           bgMusicId: selectedBgMusicId || 'none',
+          bgMusicVolume,
           vinylStyle,
           maxSeconds: maxDuration + 5,
           durationSeconds: recordedDuration,
@@ -485,7 +492,11 @@ function StudioContent() {
               </h3>
             </div>
 
-            {/* 1. Filter Preset Selector */}
+            {/* Primary complete vinyl recipe. The legacy voice filter remains
+                below as a compatible advanced coloration control. */}
+            <VinylPresetSelector selected={vinylPresetId} onChange={setVinylPresetId} />
+
+            {/* 1. Voice coloration selector */}
             <FilterSelector
               selectedFilter={filterPreset}
               onChange={setFilterPreset}

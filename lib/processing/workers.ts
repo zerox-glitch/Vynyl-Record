@@ -19,14 +19,18 @@
  */
 
 import { ProcessingJob, ProcessingWorker } from '@/types';
+import path from 'node:path';
 import {
   heartbeat,
   completeJob,
   failJob,
 } from './queue';
-import { processAudioTrack, probeDurationSeconds } from '@/lib/audio/processor';
+import { audioScratchDir, probeDurationSeconds, pressVinylMaster, trimAudioSegment } from '@/lib/audio/processor';
 import { downloadToTmp, persistRecordAudio, cleanupFiles } from '@/lib/audio/storage';
-import { getRecordingByIdForStatus, updateRecordingProcessing, saveTranscript } from '@/lib/db';
+import { renderVinylBed } from '@/lib/audio/vinylBed';
+import { resolveVinylPreset, FILTER_TO_VINYL_PRESET } from '@/lib/audio/presets';
+import { hashStringToSeed } from '@/lib/audio/random';
+import { getAudioAssetById, getRecordingByIdForStatus, updateRecordingProcessing, saveTranscript } from '@/lib/db';
 import { getTranscriptProvider } from '@/lib/transcription/provider';
 import { getStorage, buildRecordKey } from '@/lib/storage/r2';
 
@@ -43,28 +47,67 @@ export const audioMasterWorker: ProcessingWorker = {
     const params = (job.params || {}) as {
       voiceFileUrl?: string;
       bgMusicFilePath?: string | null;
+      bgMusicId?: string | null;
       crackleFilePath?: string | null;
       originalStorageKey?: string | null;
       filterPreset?: string;
+      vinylPresetId?: string;
       vinylStyle?: string;
       crackleIntensity?: number;
       bgMusicVolume?: number;
       maxSeconds?: number;
     };
 
-    if (!params.voiceFileUrl) {
-      throw new Error('audio_master job missing voiceFileUrl');
+    if (!params.voiceFileUrl && !params.originalStorageKey) {
+      throw new Error('audio_master job is missing both voiceFileUrl and originalStorageKey');
     }
 
     update({ result: { stage: 'fetching_sources' } });
 
-    // Pull the input bytes onto disk so FFmpeg can stream the file.
+    // Pull inputs onto the worker's scratch disk so FFmpeg never relies on a
+    // browser URL. R2 keys are resolved to fresh short-lived GET URLs here.
+    const storage = getStorage();
     let sourceUrl = params.voiceFileUrl || '';
-    if (!sourceUrl && params.originalStorageKey && getStorage().isR2Configured) {
-      sourceUrl = (await getStorage().signedDownloadUrl(params.originalStorageKey, 900)).url;
+    if (!sourceUrl && params.originalStorageKey && storage.isR2Configured) {
+      sourceUrl = (await storage.signedDownloadUrl(params.originalStorageKey, 900)).url;
     }
     if (!sourceUrl) throw new Error('audio_master job has no source URL. Configure R2 or send a local upload URL.');
     const source = await downloadToTmp(sourceUrl, `${job.id}-source`);
+    const cleanupTargets: string[] = [source];
+
+    let backgroundPath = params.bgMusicFilePath || null;
+    let backgroundGain = params.bgMusicVolume;
+    const selectedMusicId = params.bgMusicId && params.bgMusicId !== 'none' ? params.bgMusicId : null;
+    if (!backgroundPath && selectedMusicId) {
+      const asset = await getAudioAssetById(selectedMusicId);
+      if (!asset || asset.category !== 'bg_music' || asset.is_enabled === false) {
+        throw new Error('The selected background melody is unavailable or disabled.');
+      }
+      backgroundGain = params.bgMusicVolume ?? asset.default_volume ?? 0.18;
+      let assetUrl = asset.file_url;
+      if (asset.storage_key) {
+        assetUrl = (await storage.signedDownloadUrl(asset.storage_key, 900)).url;
+      }
+      const downloadedBackground = await downloadToTmp(assetUrl, `${job.id}-background`);
+      cleanupTargets.push(downloadedBackground);
+      backgroundPath = downloadedBackground;
+
+      const sourceDuration = asset.duration_seconds || await probeDurationSeconds(downloadedBackground);
+      const trimStart = Math.max(0, asset.trim_start_seconds || 0);
+      const trimEnd = Math.min(sourceDuration, asset.trim_end_seconds || sourceDuration);
+      const hasSelectedCut = trimEnd > trimStart + 0.1 && (trimStart > 0.01 || trimEnd < sourceDuration - 0.01);
+      if (hasSelectedCut) {
+        const cutPath = path.join(audioScratchDir(), `${job.id}-${asset.id}-background-cut.wav`);
+        await trimAudioSegment({
+          inputFilePath: downloadedBackground,
+          outputFilePath: cutPath,
+          startSeconds: trimStart,
+          endSeconds: trimEnd,
+        });
+        cleanupTargets.push(cutPath);
+        backgroundPath = cutPath;
+      }
+    }
 
     await updateRecordingProcessing(job.recording_id, {
       processing_state: 'processing',
@@ -78,19 +121,27 @@ export const audioMasterWorker: ProcessingWorker = {
     update({ result: { stage: 'rendering_master' } });
 
     const outputPath = source.replace(/(\.\w+)?$/, '-master.mp3');
-    const result = await processAudioTrack({
+    const presetKey = params.vinylPresetId || (params.filterPreset ? FILTER_TO_VINYL_PRESET[params.filterPreset as keyof typeof FILTER_TO_VINYL_PRESET] : undefined);
+    const preset = resolveVinylPreset(presetKey);
+    const durationForBed = Math.max(0.6, Math.min(await probeDurationSeconds(source), params.maxSeconds ?? 600));
+    const bedPath = path.join(audioScratchDir(), `${job.id}-${preset.id}-vinyl-bed.wav`);
+    const seed = hashStringToSeed(`${job.recording_id}:${preset.id}`);
+    const bed = renderVinylBed(durationForBed, preset, seed, bedPath);
+    update({ result: { stage: 'rendering_master', preset: preset.id, bed: bed.diagnostics } });
+
+    const master = await pressVinylMaster({
       voiceFilePath: source,
       outputFilePath: outputPath,
-      filterPreset: params.filterPreset as any,
-      crackleIntensity: params.crackleIntensity ?? 0.2,
-      bgMusicFilePath: params.bgMusicFilePath ?? null,
-      crackleFilePath: params.crackleFilePath ?? null,
+      bgMusicFilePath: backgroundPath,
+      bgMusicGain: backgroundGain,
+      vinylBedFilePath: bed.filepath,
+      preset,
       maxSeconds: params.maxSeconds ?? 600,
     });
+    const result = { durationSeconds: master.durationSeconds, outputFilePath: master.outputFilePath, strategy: 'vinyl-preset' as const, container: 'mp3' as const, mix: { voice: true, bgMusic: Boolean(backgroundPath), crackle: true, filterPreset: params.filterPreset as any, levels: null } };
 
-    update({ result: { stage: 'persisting_master', durationSeconds: result.durationSeconds } });
+    update({ result: { stage: 'persisting_master', preset: preset.id, durationSeconds: result.durationSeconds, bed: bed.diagnostics } });
     const masterBytes = await import('node:fs/promises').then((mod) => mod.readFile(result.outputFilePath));
-    const storage = getStorage();
     let processedUrl = '';
     let processedKey: string | null = null;
 
@@ -118,7 +169,7 @@ export const audioMasterWorker: ProcessingWorker = {
       duration_seconds: duration,
       processed_storage_key: processedKey,
     });
-    cleanupFiles([source, result.outputFilePath]);
+    cleanupFiles([...cleanupTargets, bedPath, result.outputFilePath]);
 
     return { ...job, result: {
       stage: 'completed',

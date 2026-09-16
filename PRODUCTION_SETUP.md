@@ -20,7 +20,7 @@ Never put real secrets here or in Git.
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
-2. Apply migrations `00001` through `00007` in numeric order.
+2. Apply migrations `00001` through `00009` in numeric order (or run the consolidated `SUPABASE_SETUP.sql`).
 3. Enable Supabase Auth email/password sign-up if customer accounts are wanted now.
 4. Verify email redirect URLs point to `${NEXT_PUBLIC_APP_URL}/login`.
 5. Confirm Row Level Security is enabled and migration `00007_rls_hardening.sql` has run.
@@ -40,23 +40,22 @@ Never put real secrets here or in Git.
 
 ### Persistent processing worker
 
-1. Deploy the `worker/` directory to Railway, Fly.io, Render, or a small VPS.
-2. Install FFmpeg on the host, or ensure the bundled FFmpeg binary is executable.
+1. Deploy the **repository root** to Railway, Fly.io, Render, or a small VPS; the worker intentionally imports the shared app audio/queue modules.
+2. Use `npm ci` as the build command and `npm run worker` as the start command.
 3. Set on the worker:
+   - `NODE_ENV=production`
    - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
-   - `R2_UPLOAD_SECRET`
    - `R2_ACCOUNT_ID`
    - `R2_ACCESS_KEY_ID`
    - `R2_SECRET_ACCESS_KEY`
    - `R2_BUCKET`
    - `R2_REGION=auto`
-   - `WORKER_APP_URL`
-   - `PROCESSING_WORKER_SECRET`
    - `WORKER_POLL_MS=2500`
-4. Run `cd worker && npm install && npm start`.
+4. Ensure the bundled FFmpeg binary is executable, or install system FFmpeg.
 5. Keep `ALLOW_INLINE_FFMPEG` unset or false on Vercel. The worker, not Vercel, owns long FFmpeg jobs.
-6. Run at least one worker process. Multiple workers are supported by the conditional queued-to-processing claim.
+6. Run at least one worker process. Multiple workers are supported by the shared atomic claim function.
 
 ### Stripe
 
