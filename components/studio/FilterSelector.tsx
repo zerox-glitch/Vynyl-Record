@@ -26,10 +26,10 @@ export const FilterSelector: React.FC<FilterSelectorProps> = ({
   const audioPreviewRef = React.useRef<HTMLAudioElement | null>(null);
 
   const previewAudioMap: Record<FilterPresetType, string> = {
-    clean: '/audio/demo-raw-sample.mp3?v=3',
-    gramophone: '/audio/demo-gramophone-sample.mp3?v=3',
-    radio: '/audio/demo-voice-ocean.mp3?v=3',
-    tape: '/audio/demo-lofi-sample.mp3?v=3',
+    clean: '/audio/demo-raw-sample.mp3?v=4',
+    gramophone: '/audio/demo-gramophone-sample.mp3?v=4',
+    radio: '/audio/demo-voice-ocean.mp3?v=4',
+    tape: '/audio/demo-lofi-sample.mp3?v=4',
   };
 
   const handleTogglePreview = (presetId: FilterPresetType, e: React.MouseEvent) => {

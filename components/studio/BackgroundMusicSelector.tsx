@@ -26,7 +26,7 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
   const [playingPreview, setPlayingPreview] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const bgAssets = assets.filter((a) => a.category === 'bg_music');
+  const bgAssets = assets.filter((a) => a.category === 'bg_music' && a.is_enabled !== false);
 
   const handleTogglePreview = (asset: AudioAsset, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -37,6 +37,7 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
     } else {
       if (audioRef.current) {
         audioRef.current.src = asset.file_url;
+        audioRef.current.currentTime = Math.max(0, asset.trim_start_seconds || 0);
         audioRef.current.play()
           .then(() => setPlayingPreview(asset.id))
           .catch(() => {
@@ -95,7 +96,10 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
         {/* Dynamic List from DB */}
         {bgAssets.map((asset) => {
           const isSelected = selectedBgMusicId === asset.id;
-          const isAllowedByPlan = !allowedAssetIds || allowedAssetIds.includes(asset.id) || allowedAssetIds.includes('all');
+          // The upload form labels an unchecked asset as non-premium, so it
+          // must be usable by the free tier without manually editing every
+          // plan's legacy allow-list. Premium assets still respect both gates.
+          const isAllowedByPlan = !asset.is_premium_only || !allowedAssetIds || allowedAssetIds.includes(asset.id) || allowedAssetIds.includes('all');
           const isLocked = !isAllowedByPlan || (asset.is_premium_only && !isPremium);
           const isPlaying = playingPreview === asset.id;
 
@@ -131,6 +135,11 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
                       Master Wax Exclusive
                     </span>
                   )}
+                  {asset.trim_end_seconds && asset.trim_end_seconds > (asset.trim_start_seconds || 0) && (
+                    <span className="text-[10px] text-stone-500 font-mono">
+                      Curated {Math.max(0, asset.trim_end_seconds - (asset.trim_start_seconds || 0)).toFixed(1)}s cut
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -157,7 +166,18 @@ export const BackgroundMusicSelector: React.FC<BackgroundMusicSelectorProps> = (
         })}
       </div>
 
-      <audio ref={audioRef} onEnded={() => setPlayingPreview(null)} className="hidden" />
+      <audio
+        ref={audioRef}
+        onTimeUpdate={(event) => {
+          const asset = bgAssets.find((item) => item.id === playingPreview);
+          if (!asset?.trim_end_seconds || event.currentTarget.currentTime < asset.trim_end_seconds) return;
+          event.currentTarget.pause();
+          event.currentTarget.currentTime = Math.max(0, asset.trim_start_seconds || 0);
+          setPlayingPreview(null);
+        }}
+        onEnded={() => setPlayingPreview(null)}
+        className="hidden"
+      />
     </div>
   );
 };

@@ -90,9 +90,9 @@ export const FILTER_PRESETS: FilterPresetConfig[] = [
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   hero_copy: {
-    headline: 'Preserve Your Voice in Digital Wax',
-    subheadline: 'Send a timeless, crackling 3D vinyl message to someone you love. A gift they will listen to forever.',
-    cta_text: 'Record Your Memory Now',
+    headline: 'A voice they can return to.',
+    subheadline: 'Press a few seconds of the people you love into a warm vinyl record. The needle drops, the wax turns, and your words come through the room.',
+    cta_text: 'Press Your Voice',
   },
   branding_theme: {
     primary_color: '#d97706',
@@ -103,20 +103,20 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   },
   faqs: [
     {
-      q: 'How does the recipient listen to my vinyl note?',
-      a: 'They simply open your custom link on any browser or mobile device. A cinematic 3D turntable appears, gracefully lowers the brass needle onto the rotating vinyl wax, and plays your warm, crackling voice with real-time word-by-word scrolling parchment lyrics.',
+      q: 'How do they hear it?',
+      a: 'You send them a single link. They open it in any browser. A 3D turntable appears, the needle lands on the wax, and your voice starts playing \u2014 no app, no account, nothing to download.',
     },
     {
-      q: 'Can I download the mastered audio file?',
-      a: 'Yes! Every pressed record includes a permanent 192kbps MP3 download containing the complete analog master (voice, tube filters, background music, and crackle mixed together).',
+      q: 'Can they keep it?',
+      a: 'Yes. The recording has a download button beneath the turntable, so they can save the audio forever. The link itself never expires either.',
     },
     {
-      q: 'Do recordings expire?',
-      a: 'Never. Digital wax records are permanently stored and preserved. Your loved ones can revisit their anniversary note, grandmother story, or wedding vows decades into the future.',
+      q: 'How long should it be?',
+      a: 'A few seconds is plenty. The best ones rarely are. A sentence you can\u2019t quite say out loud is usually exactly enough.',
     },
     {
-      q: 'What equipment do I need to record?',
-      a: 'Nothing special! Your phone or computer microphone is all you need. Our server-side FFmpeg audio engine applies authentic acoustic gramophone horn filters and tape warmth to make your voice sound like a rare 1920s record.',
+      q: 'What if I don\u2019t like the sound of my voice?',
+      a: 'You won\u2019t. Nobody does. The vintage warmth takes the edge off, and what comes through is closer to how the people who love you already hear you.',
     },
   ],
 };

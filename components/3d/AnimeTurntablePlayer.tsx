@@ -1,31 +1,36 @@
 'use client';
 
 /**
- * AnimeTurntablePlayer
+ * TurntablePlayer — a clean, realistic 3D vinyl record player.
  * ----------------------------------------------------------------------------
- * A single-canvas 3D "anime cel-shaded" vinyl record player.
+ * Replaces the old "anime cel-shaded" look with physically-based materials:
  *
- * Design goals:
- *  - Beautiful, stylised-but-tangible turntable (toon bands for painted parts,
- *    physical materials for brass/chrome/glass so the metal still feels real).
- *  - Cheap to draw. This component deliberately avoids everything that made the
- *    old "cozy room" scene crawl: no HDR `Environment` download, no 2048²
- *    shadow map on 170 meshes, no per-frame ContactShadows, no per-vertex CPU
- *    particle loops, no full-page CSS backdrop-filter/film-grain overlays.
- *  - Self-throttling: rendering stops when the tab is hidden and when the scene
- *    is idle for a while (see `useIdleFrameloop`).
+ *  - A glossy PVC record: procedural groove texture + bump relief, clearcoat
+ *    lacquer, a static (non-spinning) light streak so the glare reads like a
+ *    real window reflection while the grooves spin underneath.
+ *  - A brushed-aluminium platter, rubber mat, spindle, walnut plinth and a
+ *    J-shaped tonearm (TubeGeometry along a curve) with counterweight,
+ *    headshell, cartridge and stylus that cues down onto the wax.
+ *  - Realistic behaviour: 33⅓ RPM spin ramp, tonearm swings out of its rest,
+ *    the stylus lowers and rides the groove (with a faint tracking shimmer),
+ *    then returns home on stop. No sleeves, spare discs or floating notes —
+ *    the scene stays clean.
+ *
+ * Performance rules (inherited): no HDR downloads, one 1024² shadow map,
+ * module-level texture caches, and the render loop parks itself when the tab
+ * is hidden or the scene is idle (see useIdleFrameloop).
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, RoundedBox, Sparkles } from '@react-three/drei';
+import { OrbitControls, RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 import { VinylStyleType } from '@/types';
 import { VINYL_STYLES } from '@/lib/constants';
 
-export interface AnimeTurntablePlayerProps {
+export interface TurntablePlayerProps {
   isPlaying: boolean;
-  /** Needle is mid-fall toward the wax (drives the arm-drop animation). */
+  /** Needle is mid-fall toward the wax (drives the cueing animation). */
   isNeedleDropping?: boolean;
   vinylStyle?: VinylStyleType;
   title?: string;
@@ -33,7 +38,7 @@ export interface AnimeTurntablePlayerProps {
   senderName?: string;
   /** Red "REC" glow on the power LED. */
   isRecording?: boolean;
-  /** `low` trims particles/detail for small preview cards. */
+  /** `low` trims geometry resolution for small preview cards. */
   detail?: 'high' | 'low';
   className?: string;
 }
@@ -52,86 +57,40 @@ const ctx2d = (w: number, h: number) => {
   return { canvas, ctx: canvas.getContext('2d')! };
 };
 
-/** 4-band cel-shading ramp — the heart of the "anime" look. */
-function toonGradient(): THREE.Texture | null {
+/** Neutral "studio" equirect so chrome/brass pick up believable reflections. */
+function studioEnvTexture(): THREE.Texture | null {
   if (!canRender()) return null;
-  if (texCache.toon) return texCache.toon;
-  const steps = new Uint8Array([70, 140, 205, 255]);
-  const tex = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  texCache.toon = tex;
-  return tex;
-}
-
-/** Warm painted walnut with soft grain streaks. */
-function woodTexture(): THREE.Texture | null {
-  if (!canRender()) return null;
-  if (texCache.wood) return texCache.wood;
-  const { canvas, ctx } = ctx2d(512, 512);
-  const g = ctx.createLinearGradient(0, 0, 0, 512);
-  g.addColorStop(0, '#7a4a2c');
-  g.addColorStop(0.55, '#6b3f26');
-  g.addColorStop(1, '#5a3421');
+  if (texCache.env) return texCache.env;
+  const { canvas, ctx } = ctx2d(256, 128);
+  const g = ctx.createLinearGradient(0, 0, 0, 128);
+  g.addColorStop(0, '#f7f3ec');
+  g.addColorStop(0.3, '#d8d2c8');
+  g.addColorStop(0.62, '#5c534c');
+  g.addColorStop(1, '#12100e');
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 90; i++) {
-    const y = (i / 90) * 512 + (Math.random() - 0.5) * 10;
-    ctx.strokeStyle = `rgba(${38 + Math.random() * 26},${20 + Math.random() * 14},12,${0.05 + Math.random() * 0.14})`;
-    ctx.lineWidth = 0.6 + Math.random() * 2.6;
-    ctx.beginPath();
-    for (let x = 0; x <= 512; x += 16) {
-      ctx.lineTo(x, y + Math.sin(x * 0.012 + i) * 4 + (Math.random() - 0.5) * 2);
-    }
-    ctx.stroke();
-  }
-  // few bright "anime" highlight streaks
-  for (let i = 0; i < 7; i++) {
-    ctx.strokeStyle = 'rgba(255,225,190,0.07)';
-    ctx.lineWidth = 8 + Math.random() * 16;
-    ctx.beginPath();
-    const y = Math.random() * 512;
-    ctx.moveTo(0, y);
-    ctx.lineTo(512, y + (Math.random() - 0.5) * 40);
-    ctx.stroke();
+  ctx.fillRect(0, 0, 256, 128);
+  // Soft key strips: a cool window band and a warm fill band.
+  const strips: Array<[number, number, number, number, string]> = [
+    [30, 8, 60, 26, 'rgba(255,255,255,0.95)'],
+    [150, 14, 48, 20, 'rgba(255,225,180,0.9)'],
+    [96, 96, 90, 10, 'rgba(255,190,120,0.35)'],
+  ];
+  for (const [x, y, w, h, c] of strips) {
+    ctx.fillStyle = c;
+    ctx.fillRect(x, y, w, h);
   }
   const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.mapping = THREE.EquirectangularReflectionMapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  texCache.wood = tex;
-  return tex;
-}
-
-/** Brushed metal for the top plate / brass trim. */
-function brushedTexture(): THREE.Texture | null {
-  if (!canRender()) return null;
-  if (texCache.brushed) return texCache.brushed;
-  const { canvas, ctx } = ctx2d(512, 512);
-  ctx.fillStyle = '#2b2724';
-  ctx.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 900; i++) {
-    const y = Math.random() * 512;
-    ctx.strokeStyle = `rgba(255,255,255,${0.01 + Math.random() * 0.05})`;
-    ctx.lineWidth = 0.5 + Math.random();
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(512, y + (Math.random() - 0.5) * 3);
-    ctx.stroke();
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  texCache.brushed = tex;
+  texCache.env = tex;
   return tex;
 }
 
 /**
- * The record face: grooves + a pastel anime centre label carrying the
- * dedication. Regenerated only when the record's metadata changes.
+ * The record face: polished wax, fine pressed grooves and a printed centre
+ * label carrying the dedication. Regenerated only per record configuration.
  */
-function recordTexture(cfg: {
+function vinylFaceTexture(cfg: {
   baseColor: string;
   labelColor: string;
   grooveColor: string;
@@ -148,103 +107,126 @@ function recordTexture(cfg: {
   const c = S / 2;
   const { canvas, ctx } = ctx2d(S, S);
 
-  // Wax body
-  ctx.fillStyle = cfg.baseColor;
+  const wax = shade(cfg.baseColor, -0.62); // vinyl wax is near-black
+  const waxEdge = shade(cfg.baseColor, -0.72);
+
+  // Wax body with a subtle radial tint (thicker acetate toward the rim).
+  const body = ctx.createRadialGradient(c, c - S * 0.02, S * 0.05, c, c, c);
+  body.addColorStop(0, wax);
+  body.addColorStop(0.82, wax);
+  body.addColorStop(1, waxEdge);
+  ctx.fillStyle = body;
   ctx.beginPath();
   ctx.arc(c, c, c, 0, Math.PI * 2);
   ctx.fill();
 
-  // Grooves: fine concentric rings, denser toward the label
-  for (let r = c * 0.46; r < c * 0.965; r += 2.1) {
-    ctx.strokeStyle = cfg.grooveColor;
-    ctx.globalAlpha = 0.32 + Math.random() * 0.4;
-    ctx.lineWidth = 0.9;
-    ctx.beginPath();
-    ctx.arc(c, c, r, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  // a couple of deeper "track change" bands
-  ctx.globalAlpha = 0.85;
-  for (const r of [c * 0.55, c * 0.68, c * 0.8, c * 0.9]) {
-    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.arc(c, c, r, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-
-  // Outer rim highlight
-  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(c, c, c - 3, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // ---- centre label (pastel disc + hand-drawn sun) ----
-  const lr = c * 0.4;
-  const lg = ctx.createRadialGradient(c - lr * 0.3, c - lr * 0.35, lr * 0.1, c, c, lr);
-  lg.addColorStop(0, '#fff7ef');
-  lg.addColorStop(0.45, cfg.labelColor);
-  lg.addColorStop(1, shade(cfg.labelColor, -0.28));
-  ctx.fillStyle = lg;
-  ctx.beginPath();
-  ctx.arc(c, c, lr, 0, Math.PI * 2);
-  ctx.fill();
-
-  // label rings
-  ctx.strokeStyle = cfg.brassAccent;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(c, c, lr - 8, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(c, c, lr - 22, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // rising-sun arcs (anime poster motif)
+  // --- Pressed grooves: concentric micro-rings with slight radius jitter ---
+  const grooveBase = shade(cfg.grooveColor, -0.4);
   ctx.save();
-  ctx.beginPath();
-  ctx.arc(c, c, lr - 26, 0, Math.PI * 2);
-  ctx.clip();
-  const sunY = c - lr * 0.18;
-  const sg = ctx.createLinearGradient(0, sunY - lr * 0.5, 0, sunY + lr * 0.5);
-  sg.addColorStop(0, 'rgba(255,236,190,0.95)');
-  sg.addColorStop(1, 'rgba(255,170,120,0.85)');
-  ctx.fillStyle = sg;
-  ctx.beginPath();
-  ctx.arc(c, sunY, lr * 0.42, Math.PI, 0);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-  ctx.lineWidth = 2;
-  for (let i = 1; i <= 4; i++) {
-    const y = sunY + i * 9;
+  ctx.globalCompositeOperation = 'source-atop';
+  for (let r = c * 0.42; r < c * 0.975; r += 2.4) {
+    const jitter = (Math.sin(r * 12.9898 + 78.233) * 43758.5453) % 1 - 0.5;
+    ctx.strokeStyle = grooveBase;
+    ctx.globalAlpha = 0.05 + Math.random() * 0.13;
+    ctx.lineWidth = 0.6 + Math.random() * 0.4;
     ctx.beginPath();
-    ctx.moveTo(c - lr, y);
-    ctx.lineTo(c + lr, y);
+    ctx.arc(c, c, r + jitter, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Mastering "band" rings — slightly deeper cuts every so often.
+  ctx.globalAlpha = 0.35;
+  for (let r = c * 0.44; r < c * 0.96; r += c * 0.08) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
     ctx.stroke();
   }
   ctx.restore();
 
-  // typography
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#fff8ec';
-  ctx.font = '600 30px Georgia, "Times New Roman", serif';
-  const title = (cfg.title || 'A Voice Note').trim();
-  ctx.fillText(clip(title, 22).toUpperCase(), c, c + lr * 0.55);
-  ctx.font = '400 21px Georgia, serif';
-  ctx.fillStyle = 'rgba(255,248,236,0.9)';
-  if (cfg.recipientName) ctx.fillText(`for ${clip(cfg.recipientName, 20)}`, c, c + lr * 0.75);
-  if (cfg.senderName) ctx.fillText(`from ${clip(cfg.senderName, 20)}`, c, c + lr * 0.94);
-  ctx.font = '500 17px ui-monospace, monospace';
-  ctx.fillStyle = cfg.brassAccent;
-  ctx.fillText('33⅓ RPM · STEREO', c, c - lr * 0.66);
-
-  // spindle hole
-  ctx.fillStyle = '#0b0908';
+  // Edge bevel highlight (the polished rim catches light).
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.arc(c, c, c * 0.033, 0, Math.PI * 2);
+  ctx.arc(c, c, c - 4, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(c, c, c - 1.5, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // --- Centre label: printed paper with ring detail ---
+  const lr = S * 0.385;
+  const lay = ctx.createRadialGradient(c - lr * 0.25, c - lr * 0.3, lr * 0.05, c, c, lr);
+  lay.addColorStop(0, '#f2e9dc');
+  lay.addColorStop(0.4, mix(cfg.labelColor, '#f2e9dc', 0.72));
+  lay.addColorStop(1, shade(cfg.labelColor, -0.35));
+  ctx.fillStyle = lay;
+  ctx.beginPath();
+  ctx.arc(c, c, lr, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Paper speckle.
+  ctx.save();
+  ctx.globalCompositeOperation = 'overlay';
+  for (let i = 0; i < 260; i++) {
+    ctx.fillStyle = `rgba(${120 + Math.random() * 60},${100 + Math.random() * 60},${80 + Math.random() * 50},${0.03 + Math.random() * 0.07})`;
+    const a = Math.random() * Math.PI * 2;
+    const rr = Math.sqrt(Math.random()) * lr;
+    ctx.fillRect(c + Math.cos(a) * rr, c + Math.sin(a) * rr, 1.4, 1.4);
+  }
+  ctx.restore();
+
+  // Printed rings.
+  ctx.strokeStyle = cfg.brassAccent;
+  ctx.globalAlpha = 0.85;
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.arc(c, c, lr - 10, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(c, c, lr - 16, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = shade(cfg.labelColor, 0.25);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(c, c, lr - 28, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Label typography.
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fdf6e9';
+  ctx.font = '600 26px Georgia, "Times New Roman", serif';
+  const title = clip(cfg.title || 'A Voice Note', 24);
+  ctx.fillText(title.toUpperCase(), c, c - lr * 0.08);
+
+  ctx.font = '400 15px ui-monospace, "SF Mono", monospace';
+  ctx.fillStyle = 'rgba(253,246,233,0.78)';
+  ctx.fillText('33⅓ RPM · STEREO', c, c - lr * 0.4);
+  ctx.fillText('SIDE A', c, c + lr * 0.32);
+
+  if (cfg.recipientName) {
+    ctx.font = 'italic 400 20px Georgia, serif';
+    ctx.fillStyle = 'rgba(253,246,233,0.92)';
+    ctx.fillText(`for ${clip(cfg.recipientName, 20)}`, c, c + lr * 0.46);
+  }
+  if (cfg.senderName) {
+    ctx.font = 'italic 400 17px Georgia, serif';
+    ctx.fillStyle = 'rgba(253,246,233,0.78)';
+    ctx.fillText(`from ${clip(cfg.senderName, 20)}`, c, c + lr * 0.6);
+  }
+  ctx.font = '600 13px ui-monospace, monospace';
+  ctx.fillStyle = cfg.brassAccent;
+  ctx.fillText('VINYL VOICE NOTES', c, c + lr * 0.78);
+
+  // Spindle hole.
+  ctx.fillStyle = '#060504';
+  ctx.beginPath();
+  ctx.arc(c, c, S * 0.026, 0, Math.PI * 2);
   ctx.fill();
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -254,72 +236,130 @@ function recordTexture(cfg: {
   return tex;
 }
 
-/** Sleeve artwork for the record jacket lying on the table. */
-function sleeveTexture(cfg: { labelColor: string; brassAccent: string; title: string; recipientName?: string }): THREE.Texture | null {
+/** Grayscale relief used as the bump map so grooves catch light microscopically. */
+function vinylBumpTexture(): THREE.Texture | null {
   if (!canRender()) return null;
-  const key = `sleeve:${cfg.title}|${cfg.recipientName}|${cfg.labelColor}`;
-  if (texCache[key]) return texCache[key];
-  const { canvas, ctx } = ctx2d(512, 512);
-  const g = ctx.createLinearGradient(0, 0, 512, 512);
-  g.addColorStop(0, '#ffe9d6');
-  g.addColorStop(0.55, '#f6cfae');
-  g.addColorStop(1, '#e6a98a');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 512, 512);
-
-  // big sun
-  const sun = ctx.createLinearGradient(0, 90, 0, 300);
-  sun.addColorStop(0, cfg.brassAccent);
-  sun.addColorStop(1, cfg.labelColor);
-  ctx.fillStyle = sun;
-  ctx.beginPath();
-  ctx.arc(256, 250, 120, Math.PI, 0);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  for (let i = 0; i < 5; i++) {
-    ctx.fillRect(136, 250 + i * 12, 240, 4);
+  if (texCache.bump) return texCache.bump;
+  const S = 512;
+  const c = S / 2;
+  const { canvas, ctx } = ctx2d(S, S);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, S, S);
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  for (let r = c * 0.42; r < c * 0.96; r += 2.0) {
+    ctx.strokeStyle = `rgba(120,120,120,${0.25 + Math.random() * 0.3})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(c, c, r + (Math.random() - 0.5) * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
   }
-  // hills
-  ctx.fillStyle = 'rgba(80,45,30,0.35)';
-  ctx.beginPath();
-  ctx.moveTo(0, 300);
-  ctx.quadraticCurveTo(140, 250, 260, 300);
-  ctx.quadraticCurveTo(390, 350, 512, 296);
-  ctx.lineTo(512, 512);
-  ctx.lineTo(0, 512);
-  ctx.fill();
-
-  ctx.fillStyle = '#3a2418';
-  ctx.textAlign = 'left';
-  ctx.font = '700 34px Georgia, serif';
-  ctx.fillText('VYNYL', 40, 66);
-  ctx.font = '400 19px ui-monospace, monospace';
-  ctx.fillStyle = 'rgba(58,36,24,0.75)';
-  ctx.fillText('VOICE MEMORY · SIDE A', 40, 92);
-
-  ctx.textAlign = 'center';
-  ctx.font = '600 27px Georgia, serif';
-  ctx.fillStyle = '#3a2418';
-  ctx.fillText(clip(cfg.title || 'A Voice Note', 26), 256, 452);
-  if (cfg.recipientName) {
-    ctx.font = 'italic 400 20px Georgia, serif';
-    ctx.fillStyle = 'rgba(58,36,24,0.8)';
-    ctx.fillText(`for ${clip(cfg.recipientName, 24)}`, 256, 480);
+  for (let r = c * 0.44; r < c * 0.94; r += c * 0.1) {
+    ctx.strokeStyle = 'rgba(90,90,90,0.5)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.stroke();
   }
+  ctx.restore();
   const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  texCache[key] = tex;
+  texCache.bump = tex;
   return tex;
 }
 
-/** Soft ellipse used as a fake (free) contact shadow. */
+/** Brushed aluminium for the platter and trim. */
+function platterBrushedTexture(): THREE.Texture | null {
+  if (!canRender()) return null;
+  if (texCache.platter) return texCache.platter;
+  const { canvas, ctx } = ctx2d(512, 512);
+  ctx.fillStyle = '#b9b4ac';
+  ctx.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 1100; i++) {
+    const y = Math.random() * 512;
+    const light = Math.random() > 0.5;
+    ctx.strokeStyle = light ? 'rgba(255,255,255,0.10)' : 'rgba(60,55,50,0.14)';
+    ctx.lineWidth = 0.5 + Math.random() * 0.8;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(512, y + (Math.random() - 0.5) * 3);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  texCache.platter = tex;
+  return tex;
+}
+
+/** Dark walnut grain for the plinth and studio table. */
+function walnutTexture(): THREE.Texture | null {
+  if (!canRender()) return null;
+  if (texCache.walnut) return texCache.walnut;
+  const { canvas, ctx } = ctx2d(512, 512);
+  const g = ctx.createLinearGradient(0, 0, 0, 512);
+  g.addColorStop(0, '#4a2e1c');
+  g.addColorStop(0.5, '#3c2415');
+  g.addColorStop(1, '#2b1a10');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 130; i++) {
+    const y = (i / 130) * 512 + (Math.random() - 0.5) * 6;
+    ctx.strokeStyle = `rgba(${24 + Math.random() * 18},${13 + Math.random() * 10},${8},${0.08 + Math.random() * 0.16})`;
+    ctx.lineWidth = 0.8 + Math.random() * 2.4;
+    ctx.beginPath();
+    for (let x = 0; x <= 512; x += 14) {
+      ctx.lineTo(x, y + Math.sin(x * 0.014 + i * 1.7) * 4 + (Math.random() - 0.5) * 2);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < 5; i++) {
+    ctx.strokeStyle = 'rgba(255,214,170,0.05)';
+    ctx.lineWidth = 6 + Math.random() * 10;
+    ctx.beginPath();
+    const y = Math.random() * 512;
+    ctx.moveTo(0, y);
+    ctx.lineTo(512, y + (Math.random() - 0.5) * 30);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  texCache.walnut = tex;
+  return tex;
+}
+
+/** Fine dark brushed metal for the chassis top plate. */
+function darkBrushedTexture(): THREE.Texture | null {
+  if (!canRender()) return null;
+  if (texCache.darkBrush) return texCache.darkBrush;
+  const { canvas, ctx } = ctx2d(512, 512);
+  ctx.fillStyle = '#26252a';
+  ctx.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 1100; i++) {
+    const y = Math.random() * 512;
+    ctx.strokeStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 0.4 + Math.random() * 0.7;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(512, y + (Math.random() - 0.5) * 2);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  texCache.darkBrush = tex;
+  return tex;
+}
+
+/** Soft radial blob used as a cheap contact shadow under the unit. */
 function shadowTexture(): THREE.Texture | null {
   if (!canRender()) return null;
   if (texCache.shadow) return texCache.shadow;
   const { canvas, ctx } = ctx2d(256, 128);
-  const g = ctx.createRadialGradient(128, 64, 4, 128, 64, 120);
-  g.addColorStop(0, 'rgba(0,0,0,0.55)');
-  g.addColorStop(0.55, 'rgba(0,0,0,0.24)');
+  const g = ctx.createRadialGradient(128, 64, 6, 128, 64, 122);
+  g.addColorStop(0, 'rgba(0,0,0,0.62)');
+  g.addColorStop(0.55, 'rgba(0,0,0,0.28)');
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 256, 128);
@@ -328,15 +368,52 @@ function shadowTexture(): THREE.Texture | null {
   return tex;
 }
 
-/** Radial glow sprite for LEDs, needle light and music notes. */
+/** Static window-reflection streak that glides over the spinning grooves. */
+function sheenTexture(): THREE.Texture | null {
+  if (!canRender()) return null;
+  if (texCache.sheen) return texCache.sheen;
+  const { canvas, ctx } = ctx2d(256, 256);
+  ctx.clearRect(0, 0, 256, 256);
+  const c = 128;
+  // Broad soft pool.
+  const pool = ctx.createRadialGradient(c, c, 8, c, c, 126);
+  pool.addColorStop(0, 'rgba(255,255,255,0.5)');
+  pool.addColorStop(0.55, 'rgba(255,255,255,0.12)');
+  pool.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = pool;
+  ctx.fillRect(0, 0, 256, 256);
+  // Two diagonal window streaks (fresnel-style).
+  for (const [cx, cy, rx, ry, rot, a] of [
+    [86, 118, 62, 8, -0.4, 0.55],
+    [176, 96, 82, 5, -0.4, 0.38],
+  ] as const) {
+    ctx.save();
+    ctx.translate(cx as number, cy as number);
+    ctx.rotate(rot as number);
+    ctx.scale(1, (ry as number) / (rx as number));
+    const streak = ctx.createRadialGradient(0, 0, 2, 0, 0, rx as number);
+    streak.addColorStop(0, `rgba(255,250,235,${a as number})`);
+    streak.addColorStop(1, 'rgba(255,250,235,0)');
+    ctx.fillStyle = streak;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx as number, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  texCache.sheen = tex;
+  return tex;
+}
+
+/** Radial glow dot for the stylus light and LEDs. */
 function glowTexture(): THREE.Texture | null {
   if (!canRender()) return null;
   if (texCache.glow) return texCache.glow;
   const { canvas, ctx } = ctx2d(128, 128);
   const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
   g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.25, 'rgba(255,225,160,0.75)');
-  g.addColorStop(1, 'rgba(255,190,90,0)');
+  g.addColorStop(0.25, 'rgba(255,228,170,0.8)');
+  g.addColorStop(1, 'rgba(255,190,110,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(canvas);
@@ -344,40 +421,23 @@ function glowTexture(): THREE.Texture | null {
   return tex;
 }
 
-/** Tiny procedural equirect "studio" so metals get reflections — no HDR fetch. */
-function envTexture(): THREE.Texture | null {
+/** Engraved brand plate text. */
+function brandPlateTexture(): THREE.Texture | null {
   if (!canRender()) return null;
-  if (texCache.env) return texCache.env;
-  const { canvas, ctx } = ctx2d(256, 128);
-  const g = ctx.createLinearGradient(0, 0, 0, 128);
-  g.addColorStop(0, '#f6e7d5');
-  g.addColorStop(0.42, '#c8a68d');
-  g.addColorStop(0.55, '#4d3b34');
-  g.addColorStop(1, '#100d0b');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 256, 128);
-  // two soft key-light strips -> believable specular highlights on brass
-  ctx.fillStyle = 'rgba(255,246,225,0.95)';
-  ctx.fillRect(24, 12, 66, 22);
-  ctx.fillStyle = 'rgba(255,214,150,0.7)';
-  ctx.fillRect(168, 18, 46, 16);
+  if (texCache.brand) return texCache.brand;
+  const { canvas, ctx } = ctx2d(256, 64);
+  ctx.clearRect(0, 0, 256, 64);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 26px Georgia, "Times New Roman", serif';
+  ctx.fillStyle = 'rgba(30,20,10,0.9)';
+  ctx.fillText('VYNYL', 128, 24);
+  ctx.font = '600 11px ui-monospace, monospace';
+  ctx.fillStyle = 'rgba(30,20,10,0.55)';
+  ctx.fillText('VOICE MEMORIES PRESSED IN WAX', 128, 46);
   const tex = new THREE.CanvasTexture(canvas);
-  tex.mapping = THREE.EquirectangularReflectionMapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  texCache.env = tex;
-  return tex;
-}
-
-/** Table-top wood: same grain, tiled wider than the plinth's. */
-function woodFloorTexture(): THREE.Texture | null {
-  if (!canRender()) return null;
-  if (texCache.woodFloor) return texCache.woodFloor;
-  const base = woodTexture();
-  if (!base) return null;
-  const tex = base.clone();
-  tex.repeat.set(5, 3.4);
-  tex.needsUpdate = true;
-  texCache.woodFloor = tex;
+  texCache.brand = tex;
   return tex;
 }
 
@@ -396,14 +456,26 @@ function shade(hex: string, amt: number) {
   return `rgb(${r},${g},${b})`;
 }
 
+function mix(hex: string, other: string, t: number) {
+  const parse = (h: string) => {
+    const c = h.replace('#', '');
+    const n = parseInt(c.length === 3 ? c.split('').map((x) => x + x).join('') : c, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const [r1, g1, b1] = parse(hex);
+  const [r2, g2, b2] = parse(other);
+  const ch = (a: number, b: number) => Math.round(a + (b - a) * t);
+  return `rgb(${ch(r1, r2)},${ch(g1, g2)},${ch(b1, b2)})`;
+}
+
 /* ------------------------------------------------------------------ */
 /* Scene helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Installs a lightweight procedural environment map for metal reflections. */
+/** Installs the procedural studio environment map for metal reflections. */
 function ProceduralEnv() {
   const { scene } = useThree();
-  const tex = useMemo(() => envTexture(), []);
+  const tex = useMemo(() => studioEnvTexture(), []);
   useEffect(() => {
     if (!tex) return;
     scene.environment = tex;
@@ -428,6 +500,63 @@ function useSpinRamp(target: number) {
   return speed;
 }
 
+/* ------------------------------------------------------------------ */
+/* Fixed scene geometry (tuned so the tonearm arc lands on the wax)   */
+/* ------------------------------------------------------------------ */
+
+const RECORD_CENTER: [number, number] = [-0.55, 0.0]; // (x, z)
+const RECORD_RADIUS = 1.225;
+const ARM_PIVOT_XZ: [number, number] = [1.42, -1.3]; // back-right corner
+// Land the stylus on the lead-in groove, ~72° around the record from the
+// pivot axis. With the arm length derived from this point, the arm can never
+// overshoot the wax.
+const LAND_ANGLE = 1.25; // radians
+
+/** Point on the record the stylus rides. */
+function grooveLanding(): { x: number; z: number; length: number } {
+  const dx = ARM_PIVOT_XZ[0] - RECORD_CENTER[0];
+  const dz = ARM_PIVOT_XZ[1] - RECORD_CENTER[1];
+  const len = Math.hypot(dx, dz) || 1;
+  const ux = dx / len;
+  const uz = dz / len;
+  const a = LAND_ANGLE;
+  const vx = ux * Math.cos(a) - uz * Math.sin(a);
+  const vz = ux * Math.sin(a) + uz * Math.cos(a);
+  const r = RECORD_RADIUS * 0.86;
+  const x = RECORD_CENTER[0] + vx * r;
+  const z = RECORD_CENTER[1] + vz * r;
+  const length = Math.hypot(x - ARM_PIVOT_XZ[0], z - ARM_PIVOT_XZ[1]);
+  return { x, z, length };
+}
+
+const LANDING = grooveLanding();
+const ARM_LENGTH = LANDING.length;
+
+/** Arm-rest post sits exactly one arm-length from the pivot. */
+function restPost(): { x: number; z: number } {
+  const [ux, uz] = [-0.3, 0.954];
+  return {
+    x: ARM_PIVOT_XZ[0] + ux * ARM_LENGTH,
+    z: ARM_PIVOT_XZ[1] + uz * ARM_LENGTH,
+  };
+}
+const REST = restPost();
+
+/** Yaw (rotation about Y) that points local -z (the arm tube) at a world target. */
+function solveYaw(tx: number, tz: number): number {
+  const dx = tx - ARM_PIVOT_XZ[0];
+  const dz = tz - ARM_PIVOT_XZ[1];
+  const len = Math.hypot(dx, dz) || 1;
+  return Math.atan2(-dx / len, -dz / len);
+}
+
+const YAW_GROOVE = solveYaw(LANDING.x, LANDING.z);
+const YAW_REST = solveYaw(REST.x, REST.z);
+
+/* ------------------------------------------------------------------ */
+/* Record + platter                                                    */
+/* ------------------------------------------------------------------ */
+
 function PlatterAndRecord({
   isPlaying,
   isNeedleDropping,
@@ -435,6 +564,7 @@ function PlatterAndRecord({
   title,
   recipientName,
   senderName,
+  detail,
 }: {
   isPlaying: boolean;
   isNeedleDropping: boolean;
@@ -442,14 +572,16 @@ function PlatterAndRecord({
   title: string;
   recipientName?: string;
   senderName?: string;
+  detail: 'high' | 'low';
 }) {
   const spin = useRef<THREE.Group>(null);
   const sheen = useRef<THREE.Mesh>(null);
   const style = VINYL_STYLES.find((s) => s.id === vinylStyle) || VINYL_STYLES[0];
-  const gradient = useMemo(() => toonGradient(), []);
+  const segs = detail === 'low' ? 64 : 128;
+
   const label = useMemo(
     () =>
-      recordTexture({
+      vinylFaceTexture({
         baseColor: style.baseColor,
         labelColor: style.labelColor,
         grooveColor: style.grooveColor,
@@ -460,187 +592,285 @@ function PlatterAndRecord({
       }),
     [style, title, recipientName, senderName]
   );
+  const bump = useMemo(() => vinylBumpTexture(), []);
+  const platterTex = useMemo(() => platterBrushedTexture(), []);
+  const sheenTex = useMemo(() => sheenTexture(), []);
+  const castShadow = detail === 'high';
 
   const speed = useSpinRamp(isPlaying || isNeedleDropping ? BAND : 0);
 
   useFrame((state, delta) => {
     const d = Math.min(delta, 0.05);
     if (spin.current) spin.current.rotation.y += speed.current * d;
-    // The reflected highlight stays put in world space (a spinning record's
-    // glare doesn't spin with it) — a small breathing drift sells the gloss.
+    // The glare (window reflection) stays put in world space while the grooves
+    // rotate underneath — exactly how a real gloss surface behaves. It breathes
+    // and drifts very slowly so it never reads as a frozen sticker.
     if (sheen.current) {
       const t = state.clock.elapsedTime;
+      sheen.current.rotation.z = 0.35 + Math.sin(t * 0.05) * 0.12;
       (sheen.current.material as THREE.MeshBasicMaterial).opacity =
-        (isPlaying ? 0.2 : 0.12) + Math.sin(t * 0.7) * 0.03;
+        (isPlaying ? 0.2 : 0.13) + Math.sin(t * 0.6) * 0.025;
     }
   });
 
   return (
-    <group position={[-0.55, 0.5, 0]}>
-      {/* Brass platter rim */}
-      <mesh position={[0, -0.045, 0]} receiveShadow>
-        <cylinderGeometry args={[1.32, 1.35, 0.1, 64]} />
-        <meshStandardMaterial color="#c98a3c" metalness={0.92} roughness={0.28} />
+    <group position={[RECORD_CENTER[0], 0, RECORD_CENTER[1]]}>
+      {/* Fixed platter well ring on the deck */}
+      <mesh position={[0, 0.5565, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[1.365, 0.016, 10, 96]} />
+        <meshStandardMaterial color="#131110" roughness={0.6} metalness={0.4} />
       </mesh>
-      {/* Rotating group: mat, record, label, spindle */}
-      <group ref={spin}>
-        <mesh position={[0, 0.005, 0]}>
-          <cylinderGeometry args={[1.27, 1.27, 0.012, 64]} />
-          <meshToonMaterial color="#2a1f1a" gradientMap={gradient ?? undefined} />
-        </mesh>
-        {/* Wax body */}
-        <mesh position={[0, 0.028, 0]} castShadow>
-          <cylinderGeometry args={[1.22, 1.22, 0.028, 96]} />
+
+      {/* Rotating group: platter disc, mat, record, spindle */}
+      <group ref={spin} position={[0, 0.5375, 0]}>
+        {/* Aluminium platter */}
+        <mesh position={[0, 0.026, 0]} castShadow={castShadow}>
+          <cylinderGeometry args={[1.315, 1.31, 0.055, segs]} />
           <meshPhysicalMaterial
-            color={style.baseColor}
-            roughness={0.22}
-            metalness={0.15}
-            clearcoat={0.85}
-            clearcoatRoughness={0.08}
-            reflectivity={0.6}
+            map={platterTex ?? undefined}
+            color="#cfc9bf"
+            metalness={0.9}
+            roughness={0.32}
+            envMapIntensity={0.9}
+            clearcoat={0.4}
+            clearcoatRoughness={0.3}
           />
         </mesh>
-        {/* Grooved face + pastel label */}
-        <mesh position={[0, 0.043, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[1.217, 96]} />
+        {/* Rubber mat */}
+        <mesh position={[0, 0.058, 0]}>
+          <cylinderGeometry args={[1.29, 1.29, 0.012, segs]} />
+          <meshStandardMaterial color="#17151a" roughness={0.94} metalness={0} />
+        </mesh>
+        {/* The record itself: glossy wax, grooved face, printed label */}
+        <mesh position={[0, 0.075, 0]} castShadow={castShadow}>
+          <cylinderGeometry args={[RECORD_RADIUS, RECORD_RADIUS, 0.034, segs]} />
+          <meshPhysicalMaterial
+            color={shade(style.baseColor, -0.72)}
+            roughness={0.3}
+            metalness={0.08}
+            clearcoat={1}
+            clearcoatRoughness={0.1}
+            envMapIntensity={0.95}
+          />
+        </mesh>
+        <mesh position={[0, 0.0924, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[RECORD_RADIUS - 0.004, segs]} />
           {label ? (
-            <meshBasicMaterial map={label} transparent />
+            <meshPhysicalMaterial
+              map={label}
+              bumpMap={bump ?? undefined}
+              bumpScale={0.09}
+              roughness={0.32}
+              metalness={0.05}
+              clearcoat={0.9}
+              clearcoatRoughness={0.14}
+              envMapIntensity={0.9}
+              side={THREE.DoubleSide}
+            />
           ) : (
-            <meshBasicMaterial color={style.baseColor} />
+            <meshPhysicalMaterial color={shade(style.baseColor, -0.72)} roughness={0.3} clearcoat={1} />
           )}
         </mesh>
-        {/* 45 rpm adapter */}
-        <mesh position={[0, 0.075, 0]}>
-          <cylinderGeometry args={[0.075, 0.08, 0.05, 24]} />
-          <meshStandardMaterial color="#f4f0e8" metalness={0.55} roughness={0.35} />
+        {/* Spindle pin */}
+        <mesh position={[0, 0.155, 0]} castShadow={castShadow}>
+          <cylinderGeometry args={[0.028, 0.028, 0.21, 20]} />
+          <meshStandardMaterial color="#e8e2d6" metalness={1} roughness={0.16} envMapIntensity={1.1} />
         </mesh>
       </group>
-      {/* Static gloss sweep over the grooves */}
-      <mesh ref={sheen} position={[0, 0.0465, 0]} rotation={[-Math.PI / 2, 0, 0.6]}>
-        <circleGeometry args={[1.215, 48, 0, Math.PI * 2]} />
+
+      {/* Static gloss streak over the grooves (see useFrame above) */}
+      <mesh ref={sheen} position={[0, 0.0938, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[RECORD_RADIUS * 1.7, RECORD_RADIUS * 1.7]} />
         <meshBasicMaterial
-          color="#fff3d6"
+          map={sheenTex ?? undefined}
           transparent
           opacity={0.14}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
+          color="#fff2dc"
         />
-      </mesh>
-      {/* Spindle pin */}
-      <mesh position={[0, 0.12, 0]}>
-        <cylinderGeometry args={[0.026, 0.026, 0.16, 16]} />
-        <meshStandardMaterial color="#efe7d8" metalness={1} roughness={0.12} />
-      </mesh>
-      {/* Drive belt hint */}
-      <mesh position={[0, -0.09, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[1.15, 0.012, 6, 64]} />
-        <meshToonMaterial color="#1a1512" gradientMap={gradient ?? undefined} />
       </mesh>
     </group>
   );
 }
 
-function Tonearm({ isPlaying, isNeedleDropping }: { isPlaying: boolean; isNeedleDropping: boolean }) {
+/* ------------------------------------------------------------------ */
+/* Tonearm                                                             */
+/* ------------------------------------------------------------------ */
+
+function Tonearm({
+  isPlaying,
+  isNeedleDropping,
+  detail,
+}: {
+  isPlaying: boolean;
+  isNeedleDropping: boolean;
+  detail: 'high' | 'low';
+}) {
   const yaw = useRef<THREE.Group>(null);
-  const pitch = useRef<THREE.Group>(null);
+  const cue = useRef<THREE.Group>(null);
   const glow = useRef<THREE.Sprite>(null);
   const progress = useRef(0);
-  const gradient = useMemo(() => toonGradient(), []);
+  const head = useRef<THREE.Group>(null);
+
   const glowTex = useMemo(() => glowTexture(), []);
+
+  // J-shaped tonearm tube, built once.
+  const tube = useMemo(() => {
+    const end = ARM_LENGTH - 0.22;
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0.02, 0, -0.12), // pivot end
+      new THREE.Vector3(0.02, 0.05, -end * 0.42),
+      new THREE.Vector3(0.03, 0.04, -end * 0.72),
+      new THREE.Vector3(0.035, 0, -end * 0.94),
+      new THREE.Vector3(0.03, -0.02, -end),
+    ]);
+    const geo = new THREE.TubeGeometry(curve, 64, 0.028, 10, false);
+    return geo;
+  }, []);
 
   useFrame((state, delta) => {
     const d = Math.min(delta, 0.05);
     const armDown = isPlaying || isNeedleDropping;
-    if (armDown) progress.current = Math.min(1, progress.current + d * 0.014);
+    // Slow physical descent, swift return to rest.
+    if (armDown) progress.current = Math.min(1, progress.current + d * 0.028);
     else progress.current = Math.max(0, progress.current - d * 0.6);
 
     const t = progress.current;
-    // Yaw solves the triangle pivot→spindle→stylus: 2.49 rad puts the needle on
-    // the lead-in groove, 2.23 has it riding in toward the label, 3.31 parks it
-    // on the rest with the counterweight swung back.
-    const targetYaw = armDown ? 2.49 - t * 0.26 : 3.31;
-    const targetPitch = isPlaying ? -0.02 : isNeedleDropping ? 0.03 : 0.3;
+    const ease = t * t * (3 - 2 * t); // smoothstep
+
+    // Swing from the rest post onto the lead-in groove, drifting inward while
+    // the record turns (the groove spirals toward the label).
+    const targetYaw = THREE.MathUtils.lerp(YAW_REST, YAW_GROOVE, ease) + t * 0.045;
+
+    // Cueing: stylus rides slightly high out of the groove, settles flush on
+    // contact, lifts on the way home. The last 15% of the drop is the "needle
+    // drop" — a tiny overshoot reads as the stylus settling into the groove.
+    let targetPitch = isPlaying ? -0.002 : 0.012;
+    if (t > 0.85) targetPitch = -0.004 + Math.sin((t - 0.85) * 26) * 0.006 * (1 - t);
+    if (!armDown) targetPitch = 0.03;
 
     if (yaw.current) {
-      yaw.current.rotation.y = THREE.MathUtils.lerp(yaw.current.rotation.y, targetYaw, 1 - Math.exp(-d * 4));
+      yaw.current.rotation.y = THREE.MathUtils.lerp(yaw.current.rotation.y, targetYaw, 1 - Math.exp(-d * 5));
     }
-    if (pitch.current) {
-      pitch.current.rotation.x = THREE.MathUtils.lerp(pitch.current.rotation.x, targetPitch, 1 - Math.exp(-d * (isNeedleDropping ? 2.4 : 5)));
+    if (cue.current) {
+      cue.current.rotation.x = THREE.MathUtils.lerp(cue.current.rotation.x, targetPitch, 1 - Math.exp(-d * (armDown ? 3.2 : 6)));
     }
+
+    // Stylus light blooms once the needle is in the groove.
     if (glow.current) {
-      const pulse = 0.55 + Math.sin(state.clock.elapsedTime * 3.2) * 0.18;
       const mat = glow.current.material as THREE.SpriteMaterial;
-      mat.opacity = THREE.MathUtils.lerp(mat.opacity, armDown ? pulse : 0, 1 - Math.exp(-d * 6));
-      const s = armDown ? 0.42 : 0.001;
-      glow.current.scale.setScalar(THREE.MathUtils.lerp(glow.current.scale.x, s, 1 - Math.exp(-d * 6)));
+      const lit = armDown && t > 0.9;
+      mat.opacity = THREE.MathUtils.lerp(mat.opacity, lit ? 0.7 : 0, 1 - Math.exp(-d * 8));
+      glow.current.scale.setScalar(THREE.MathUtils.lerp(glow.current.scale.x, lit ? 0.3 : 0.001, 1 - Math.exp(-d * 8)));
+    }
+
+    // Faint tracking shimmer: the cartridge breathes as the groove runs.
+    if (head.current && isPlaying) {
+      head.current.position.y = Math.sin(state.clock.elapsedTime * 27) * 0.0006;
     }
   });
 
+  const pivotY = 0.755;
+  const headshellZ = -(ARM_LENGTH - 0.02);
+
   return (
-    <group position={[1.7, 0.58, -1.05]}>
-      {/* Pivot base */}
-      <mesh position={[0, 0, 0]} castShadow>
-        <cylinderGeometry args={[0.2, 0.24, 0.14, 32]} />
-        <meshStandardMaterial color="#c98a3c" metalness={0.9} roughness={0.26} />
+    <group position={[ARM_PIVOT_XZ[0], pivotY, ARM_PIVOT_XZ[1]]}>
+      {/* Pivot post + bearing */}
+      <mesh position={[0, -0.14, 0]} castShadow>
+        <cylinderGeometry args={[0.055, 0.075, 0.16, 28]} />
+        <meshPhysicalMaterial color="#2b2b2e" metalness={0.85} roughness={0.3} envMapIntensity={0.9} />
       </mesh>
-      <mesh position={[0, 0.1, 0]}>
-        <cylinderGeometry args={[0.12, 0.12, 0.1, 24]} />
-        <meshToonMaterial color="#241d18" gradientMap={gradient ?? undefined} />
-      </mesh>
-      {/* Arm rest — cradle under the stylus when the arm is parked */}
-      <mesh position={[0.4, 0.05, 2.32]}>
-        <cylinderGeometry args={[0.022, 0.03, 0.16, 12]} />
-        <meshStandardMaterial color="#8a5a2b" metalness={0.8} roughness={0.3} />
-      </mesh>
-      <mesh position={[0.4, 0.12, 2.32]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.045, 0.014, 6, 16, Math.PI]} />
-        <meshStandardMaterial color="#c98a3c" metalness={0.92} roughness={0.22} />
+      <mesh position={[0, -0.035, 0]}>
+        <cylinderGeometry args={[0.085, 0.09, 0.06, 28]} />
+        <meshPhysicalMaterial color="#c9c2b4" metalness={0.95} roughness={0.22} envMapIntensity={1} />
       </mesh>
 
-      <group ref={yaw} rotation={[0, 3.31, 0]}>
-        {/* Counterweight */}
-        <mesh position={[0, 0.14, 0.45]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.12, 0.12, 0.2, 24]} />
-          <meshToonMaterial color="#2c241f" gradientMap={gradient ?? undefined} />
+      {/* Cue lever beside the pivot */}
+      <group position={[0.16, -0.02, 0.05]}>
+        <mesh position={[0, -0.08, 0]}>
+          <cylinderGeometry args={[0.02, 0.03, 0.12, 16]} />
+          <meshStandardMaterial color="#3a3a3e" metalness={0.7} roughness={0.4} />
         </mesh>
-        <mesh position={[0, 0.14, 0.33]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.126, 0.126, 0.02, 24]} />
-          <meshStandardMaterial color="#c98a3c" metalness={0.95} roughness={0.2} />
+        <mesh position={[0.045, 0, 0]} rotation={[Math.PI / 2, 0, 0.5]}>
+          <cylinderGeometry args={[0.015, 0.015, 0.11, 12]} />
+          <meshPhysicalMaterial color="#e8e2d6" metalness={0.95} roughness={0.18} envMapIntensity={1} />
         </mesh>
+        <mesh position={[0.09, 0.012, 0]}>
+          <sphereGeometry args={[0.018, 12, 12]} />
+          <meshPhysicalMaterial color="#2b2b2e" metalness={0.8} roughness={0.35} />
+        </mesh>
+      </group>
 
-        <group ref={pitch} position={[0, 0.14, 0]} rotation={[0.3, 0, 0]}>
-          {/* Arm tube — reach solved against the 1.22-unit record radius */}
-          <mesh position={[0, 0, -1.12]} rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <cylinderGeometry args={[0.021, 0.021, 2.25, 16]} />
-            <meshStandardMaterial color="#e8e3d8" metalness={1} roughness={0.18} />
+      {/* Arm rest post with cradle */}
+      <mesh position={[REST.x - ARM_PIVOT_XZ[0], -0.09, REST.z - ARM_PIVOT_XZ[1]]}>
+        <cylinderGeometry args={[0.024, 0.036, 0.18, 16]} />
+        <meshPhysicalMaterial color="#8a7a5c" metalness={0.75} roughness={0.4} />
+      </mesh>
+      <mesh position={[REST.x - ARM_PIVOT_XZ[0], 0.02, REST.z - ARM_PIVOT_XZ[1]]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.052, 0.014, 8, 20, Math.PI]} />
+        <meshPhysicalMaterial color="#c9c2b4" metalness={0.95} roughness={0.2} envMapIntensity={1} />
+      </mesh>
+
+      <group ref={yaw} rotation={[0, YAW_REST, 0]}>
+        {/* Counterweight + fine-tune ring */}
+        <group position={[0, -0.02, ARM_LENGTH * 0.16]} rotation={[Math.PI / 2, 0, 0]}>
+          <mesh>
+            <cylinderGeometry args={[0.075, 0.075, 0.14, 24]} />
+            <meshStandardMaterial color="#1c1c1f" metalness={0.7} roughness={0.5} />
           </mesh>
-          {/* Headshell + cartridge */}
-          <group position={[0, -0.01, -2.2]} rotation={[0, -0.24, 0]}>
-            <mesh position={[0, 0, -0.055]}>
-              <boxGeometry args={[0.08, 0.05, 0.19]} />
-              <meshToonMaterial color="#241d18" gradientMap={gradient ?? undefined} />
+          <mesh position={[0, 0, 0.075]}>
+            <cylinderGeometry args={[0.079, 0.079, 0.018, 24]} />
+            <meshPhysicalMaterial color="#c9c2b4" metalness={0.95} roughness={0.2} envMapIntensity={1} />
+          </mesh>
+        </group>
+
+        {/* Counterweight stub behind */}
+        <mesh position={[0, -0.02, ARM_LENGTH * 0.28]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.02, 0.02, ARM_LENGTH * 0.24, 12]} />
+          <meshPhysicalMaterial color="#c9c2b4" metalness={0.95} roughness={0.25} envMapIntensity={0.9} />
+        </mesh>
+
+        <group ref={cue} rotation={[0.03, 0, 0]}>
+          {/* J-shaped arm tube */}
+          <mesh geometry={tube} castShadow>
+            <meshPhysicalMaterial color="#e6ded2" metalness={0.95} roughness={0.22} envMapIntensity={1.05} />
+          </mesh>
+
+          {/* Headshell + cartridge + stylus — stylus tip lands flush on the wax */}
+          <group ref={head} position={[0.028, -0.02, headshellZ]} rotation={[-0.12, 0, 0]}>
+            <mesh position={[0, 0.002, 0.02]}>
+              <boxGeometry args={[0.085, 0.045, 0.14]} />
+              <meshStandardMaterial color="#201f22" metalness={0.6} roughness={0.45} />
             </mesh>
-            <mesh position={[0, -0.035, -0.05]}>
-              <boxGeometry args={[0.055, 0.035, 0.1]} />
-              <meshStandardMaterial color="#f0c877" metalness={0.95} roughness={0.12} />
-            </mesh>
-            <mesh position={[0, -0.062, -0.08]} rotation={[0.25, 0, 0]}>
-              <coneGeometry args={[0.01, 0.05, 12]} />
-              <meshStandardMaterial color="#fffdf7" metalness={0.9} roughness={0.05} />
-            </mesh>
-            {/* Warm light where the stylus meets the wax */}
-            <sprite ref={glow} position={[0, -0.075, -0.085]} scale={0.001}>
+            <group position={[0, -0.03, -0.005]}>
+              <mesh position={[0, 0, 0]} rotation={[0.14, 0, 0]}>
+                <boxGeometry args={[0.058, 0.028, 0.1]} />
+                <meshPhysicalMaterial color="#8f8578" metalness={0.9} roughness={0.35} envMapIntensity={0.8} />
+              </mesh>
+              {/* Cantilever + stylus */}
+              <mesh position={[0, -0.014, -0.02]} rotation={[0.3, 0, 0]}>
+                <cylinderGeometry args={[0.005, 0.005, 0.034, 8]} />
+                <meshPhysicalMaterial color="#d8d2c8" metalness={0.95} roughness={0.15} envMapIntensity={1} />
+              </mesh>
+              <mesh position={[0, -0.048, -0.024]} rotation={[0.6, 0, 0]}>
+                <coneGeometry args={[0.0065, 0.026, 10]} />
+                <meshPhysicalMaterial color="#fdfaf2" metalness={0.8} roughness={0.2} envMapIntensity={1.2} />
+              </mesh>
+            </group>
+            {/* Warm glow where the stylus meets the wax */}
+            <sprite ref={glow} position={[0, -0.098, -0.028]} scale={0.001}>
               <spriteMaterial
                 map={glowTex ?? undefined}
-                color="#ffd89a"
+                color="#ffd9a0"
                 transparent
                 opacity={0}
                 depthWrite={false}
                 blending={THREE.AdditiveBlending}
               />
             </sprite>
-            {isPlaying && (
-              <pointLight position={[0, -0.09, -0.08]} color="#ffcf8f" intensity={0.5} distance={0.9} decay={2} />
+            {detail === 'high' && isPlaying && (
+              <pointLight position={[0, -0.1, -0.028]} color="#ffcf8f" intensity={0.6} distance={1.1} decay={2} />
             )}
           </group>
         </group>
@@ -649,243 +879,140 @@ function Tonearm({ isPlaying, isNeedleDropping }: { isPlaying: boolean; isNeedle
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Chassis                                                             */
+/* ------------------------------------------------------------------ */
+
 function Chassis({ isRecording, isPlaying }: { isRecording: boolean; isPlaying: boolean }) {
-  const gradient = useMemo(() => toonGradient(), []);
-  const wood = useMemo(() => woodTexture(), []);
-  const brushed = useMemo(() => brushedTexture(), []);
+  const wood = useMemo(() => walnutTexture(), []);
+  const brushed = useMemo(() => darkBrushedTexture(), []);
   const led = useRef<THREE.MeshStandardMaterial>(null);
-  const btn = useRef<THREE.MeshStandardMaterial>(null);
+  const btn = useRef<THREE.MeshPhysicalMaterial>(null);
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     if (led.current) {
-      const color = isRecording ? '#ff5a5a' : isPlaying ? '#7ef0b8' : '#c9b48f';
+      const color = isRecording ? '#ff4545' : isPlaying ? '#5ee8a0' : '#d8b06a';
       led.current.color.set(color);
       led.current.emissive.set(color);
       led.current.emissiveIntensity = isRecording
-        ? 1.4 + Math.sin(t * 7) * 0.7
+        ? 1.6 + Math.sin(t * 8) * 0.9
         : isPlaying
-        ? 1.1 + Math.sin(t * 2.4) * 0.28
-        : 0.35;
+        ? 1.2 + Math.sin(t * 2.6) * 0.3
+        : 0.45;
     }
     if (btn.current) {
-      btn.current.emissiveIntensity = isPlaying ? 0.75 + Math.sin(t * 2.4) * 0.18 : 0.16;
+      btn.current.emissiveIntensity = isPlaying ? 0.8 + Math.sin(t * 2.6) * 0.2 : 0.18;
     }
   });
 
-  const woodMat = (
-    <meshToonMaterial
-      color="#f3d9bf"
-      map={wood ?? undefined}
-      gradientMap={gradient ?? undefined}
-      transparent={false}
-    />
-  );
-
   return (
     <group>
-      {/* Plinth with rounded anime edges */}
-      <RoundedBox args={[4.6, 0.52, 3.3]} radius={0.075} smoothness={3} position={[0, 0.26, 0]} castShadow receiveShadow>
-        {woodMat}
+      {/* Walnut plinth */}
+      <RoundedBox args={[4.5, 0.52, 3.2]} radius={0.09} smoothness={3} position={[0, 0.26, 0]} castShadow receiveShadow>
+        <meshPhysicalMaterial
+          map={wood ?? undefined}
+          color="#8a6a50"
+          roughness={0.45}
+          metalness={0.05}
+          clearcoat={0.35}
+          clearcoatRoughness={0.5}
+          envMapIntensity={0.25}
+        />
       </RoundedBox>
-      {/* Cel outline — one extra draw call, big anime payoff */}
-      <RoundedBox args={[4.68, 0.59, 3.38]} radius={0.075} smoothness={3} position={[0, 0.26, 0]}>
-        <meshBasicMaterial color="#1b120d" side={THREE.BackSide} />
-      </RoundedBox>
-      {/* Brushed top plate */}
-      <RoundedBox args={[4.42, 0.045, 3.14]} radius={0.03} smoothness={2} position={[0, 0.545, 0]} receiveShadow>
-        <meshStandardMaterial color="#39312b" map={brushed ?? undefined} metalness={0.6} roughness={0.5} />
+      {/* Brushed dark top plate */}
+      <RoundedBox args={[4.34, 0.035, 3.04]} radius={0.02} smoothness={2} position={[0, 0.5375, 0]} receiveShadow>
+        <meshStandardMaterial map={brushed ?? undefined} color="#3a393e" metalness={0.7} roughness={0.45} envMapIntensity={0.5} />
       </RoundedBox>
       {/* Feet */}
-      {([[-2.05, -0.05, -1.4], [2.05, -0.05, -1.4], [-2.05, -0.05, 1.4], [2.05, -0.05, 1.4]] as const).map((p, i) => (
-        <mesh key={i} position={p as unknown as [number, number, number]}>
-          <cylinderGeometry args={[0.17, 0.2, 0.12, 20]} />
-          <meshToonMaterial color="#211a16" gradientMap={gradient ?? undefined} />
+      {([[-2.02, -0.05, -1.38], [2.02, -0.05, -1.38], [-2.02, -0.05, 1.38], [2.02, -0.05, 1.38]] as const).map((p, i) => (
+        <mesh key={i} position={[p[0], -0.05, p[1]]}>
+          <cylinderGeometry args={[0.14, 0.17, 0.1, 24]} />
+          <meshStandardMaterial color="#151517" roughness={0.85} metalness={0.1} />
         </mesh>
       ))}
 
-      {/* Start / stop button */}
-      <group position={[1.1, 0.575, 1.32]}>
-        <mesh position={[0, 0.005, 0]}>
-          <cylinderGeometry args={[0.19, 0.21, 0.03, 28]} />
-          <meshStandardMaterial color="#b8813a" metalness={0.9} roughness={0.3} />
+      {/* Power / start button + LED */}
+      <group position={[1.35, 0.5575, 1.28]}>
+        <mesh position={[0, 0.008, 0]}>
+          <cylinderGeometry args={[0.165, 0.175, 0.02, 30]} />
+          <meshStandardMaterial color="#3a3834" metalness={0.65} roughness={0.4} />
         </mesh>
         <mesh position={[0, 0.035, 0]}>
-          <cylinderGeometry args={[0.15, 0.16, 0.04, 28]} />
-          <meshStandardMaterial
-            ref={btn}
-            color="#f7c988"
-            emissive="#ffa64d"
-            emissiveIntensity={0.2}
-            metalness={0.2}
-            roughness={0.4}
-          />
-        </mesh>
-      </group>
-
-      {/* Pitch slider */}
-      <group position={[2.15, 0.575, -0.15]} rotation={[0, -0.16, 0]}>
-        <mesh position={[0, 0.002, 0]}>
-          <boxGeometry args={[0.1, 0.01, 0.9]} />
-          <meshToonMaterial color="#191412" gradientMap={gradient ?? undefined} />
-        </mesh>
-        <mesh position={[0.005, 0.03, 0.12]}>
-          <boxGeometry args={[0.16, 0.05, 0.1]} />
-          <meshStandardMaterial color="#e6ddcd" metalness={0.75} roughness={0.3} />
-        </mesh>
-        {[-0.34, -0.17, 0, 0.17, 0.34].map((z, i) => (
-          <mesh key={i} position={[-0.06, 0.008, z]}>
-            <boxGeometry args={[0.03, 0.006, 0.012]} />
-            <meshStandardMaterial color="#cbb694" metalness={0.7} roughness={0.4} />
-          </mesh>
-        ))}
-      </group>
-
-      {/* Power LED + brand plate */}
-      <mesh position={[2.12, 0.575, -0.8]}>
-        <sphereGeometry args={[0.038, 12, 12]} />
-        <meshStandardMaterial ref={led} color="#c9b48f" emissive="#c9b48f" emissiveIntensity={0.3} roughness={0.3} />
-      </mesh>
-      <mesh position={[-0.55, 0.3, 1.655]}>
-        <boxGeometry args={[1.15, 0.14, 0.02]} />
-        <meshStandardMaterial color="#c98a3c" metalness={0.95} roughness={0.24} />
-      </mesh>
-
-      {/* Open dust cover on its rear hinge */}
-      <group position={[0, 0.55, -1.66]} rotation={[-1.94, 0, 0]}>
-        <mesh position={[0, 0.78, 0]}>
-          <boxGeometry args={[4.42, 0.03, 0.05]} />
-          <meshStandardMaterial color="#c98a3c" metalness={0.9} roughness={0.3} />
-        </mesh>
-        <mesh position={[-2.2, 0.39, 0]}>
-          <boxGeometry args={[0.04, 0.8, 0.05]} />
-          <meshStandardMaterial color="#c98a3c" metalness={0.9} roughness={0.3} />
-        </mesh>
-        <mesh position={[2.2, 0.39, 0]}>
-          <boxGeometry args={[0.04, 0.8, 0.05]} />
-          <meshStandardMaterial color="#c98a3c" metalness={0.9} roughness={0.3} />
-        </mesh>
-        <mesh position={[0, 0.39, 0]}>
-          <planeGeometry args={[4.36, 0.76]} />
+          <cylinderGeometry args={[0.125, 0.135, 0.035, 30]} />
           <meshPhysicalMaterial
-            color="#dff0ff"
-            transparent
-            opacity={0.16}
-            roughness={0.06}
-            metalness={0}
-            side={THREE.DoubleSide}
+            ref={btn}
+            color="#3d3d41"
+            emissive="#ff9d4d"
+            emissiveIntensity={0.2}
+            metalness={0.45}
+            roughness={0.5}
+            clearcoat={0.6}
           />
         </mesh>
-        {/* anime glass streaks */}
-        <mesh position={[-0.5, 0.5, 0.004]} rotation={[0, 0, 0.35]}>
-          <planeGeometry args={[0.5, 0.05]} />
-          <meshBasicMaterial color="#ffffff" transparent opacity={0.5} blending={THREE.AdditiveBlending} depthWrite={false} />
+      </group>
+      {/* Selector knob */}
+      <group position={[1.68, 0.5575, 1.45]} rotation={[0, 0.3, 0]}>
+        <mesh position={[0, 0.012, 0]}>
+          <cylinderGeometry args={[0.055, 0.06, 0.028, 24]} />
+          <meshPhysicalMaterial color="#8f8578" metalness={0.9} roughness={0.3} envMapIntensity={0.8} />
         </mesh>
-        <mesh position={[0.4, 0.3, 0.004]} rotation={[0, 0, 0.35]}>
-          <planeGeometry args={[0.9, 0.03]} />
-          <meshBasicMaterial color="#fff6e0" transparent opacity={0.35} blending={THREE.AdditiveBlending} depthWrite={false} />
+        <mesh position={[0.055, 0.022, 0]}>
+          <boxGeometry args={[0.03, 0.012, 0.09]} />
+          <meshPhysicalMaterial color="#3a2a18" metalness={0.6} roughness={0.4} />
         </mesh>
       </group>
+      {/* Power LED */}
+      <mesh position={[1.92, 0.585, 1.28]}>
+        <sphereGeometry args={[0.03, 14, 14]} />
+        <meshStandardMaterial ref={led} color="#d8b06a" emissive="#d8b06a" emissiveIntensity={0.4} roughness={0.3} />
+      </mesh>
+      {/* Brand plate on the front of the plinth */}
+      <mesh position={[-0.2, 0.31, 1.6045]}>
+        <planeGeometry args={[1.15, 0.14]} />
+        <meshPhysicalMaterial color="#c4ab7d" metalness={0.9} roughness={0.26} envMapIntensity={0.8} />
+      </mesh>
+      <mesh position={[-0.2, 0.31, 1.6055]}>
+        <planeGeometry args={[0.98, 0.09]} />
+        <meshBasicMaterial map={brandPlateTexture() ?? undefined} transparent opacity={0.9} />
+      </mesh>
     </group>
   );
 }
 
-function TableAndProps({
-  detail,
-  title,
-  recipientName,
-}: {
-  detail: 'high' | 'low';
-  title: string;
-  recipientName?: string;
-}) {
-  const gradient = useMemo(() => toonGradient(), []);
-  const wood = useMemo(() => woodFloorTexture(), []);
+/* ------------------------------------------------------------------ */
+/* Studio table                                                        */
+/* ------------------------------------------------------------------ */
+
+function StudioTable({ detail }: { detail: 'high' | 'low' }) {
+  const wood = useMemo(() => walnutTexture(), []);
   const shadow = useMemo(() => shadowTexture(), []);
-  const sleeve = useMemo(
-    () => sleeveTexture({ labelColor: '#b45309', brassAccent: '#f59e0b', title, recipientName }),
-    [title, recipientName]
-  );
 
   return (
     <group>
-      {/* Table surface the player rests on (top face flush with y=0) */}
-      <RoundedBox args={[9.6, 0.34, 6.4]} radius={0.06} smoothness={2} position={[0, -0.17, 0.2]} receiveShadow>
-        <meshToonMaterial color="#efd0b3" map={wood ?? undefined} gradientMap={gradient ?? undefined} />
+      {/* Tabletop the player rests on */}
+      <RoundedBox args={[8.4, 0.3, 6.1]} radius={0.07} smoothness={2} position={[0, -0.17, 0]} receiveShadow>
+        <meshPhysicalMaterial
+          map={wood ?? undefined}
+          color="#6b4a33"
+          roughness={0.5}
+          metalness={0.03}
+          clearcoat={0.25}
+          clearcoatRoughness={0.6}
+        />
       </RoundedBox>
-      {/* Free "contact" shadow instead of a shadow pass under the whole table */}
-      <mesh position={[0, 0.006, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[6.9, 4.4]} />
-        <meshBasicMaterial map={shadow ?? undefined} transparent opacity={0.7} depthWrite={false} />
+      {/* Soft contact shadow between plinth and table */}
+      <mesh position={[0, -0.013, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[5.4, 3.9]} />
+        <meshBasicMaterial map={shadow ?? undefined} transparent opacity={0.65} depthWrite={false} />
       </mesh>
-
-      {/* Record sleeve lying next to the player */}
-      <group position={[3.05, 0.035, 1.15]} rotation={[-Math.PI / 2, 0, -0.34]}>
-        <mesh position={[0, 0, -0.02]}>
-          <boxGeometry args={[2.05, 2.05, 0.04]} />
-          <meshToonMaterial color="#e7b48f" gradientMap={gradient ?? undefined} />
-        </mesh>
-        <mesh position={[0, 0, 0.005]}>
-          <planeGeometry args={[1.98, 1.98]} />
-          {sleeve ? <meshBasicMaterial map={sleeve} /> : <meshBasicMaterial color="#f0c39c" />}
-        </mesh>
-      </group>
-      {/* A second sleeve peeking under it */}
+      {/* A touch of depth behind the unit, only on big views */}
       {detail === 'high' && (
-        <group position={[3.35, 0.005, 1.95]} rotation={[-Math.PI / 2, 0, 0.22]}>
-          <mesh>
-            <boxGeometry args={[2.05, 2.05, 0.03]} />
-            <meshToonMaterial color="#c98f6c" gradientMap={gradient ?? undefined} />
-          </mesh>
-        </group>
+        <mesh position={[0, -0.33, -2.7]}>
+          <planeGeometry args={[8.4, 1.6]} />
+          <meshBasicMaterial color="#0b0806" transparent opacity={0.7} />
+        </mesh>
       )}
-
-      {/* Small stack of spare records for scale */}
-      {detail === 'high' && (
-        <group position={[-3.35, -0.005, 1.6]} rotation={[0, 0.4, 0]}>
-          {[0, 0.05, 0.1].map((y, i) => (
-            <mesh key={i} position={[0, y + 0.03, 0]} rotation={[0, 0, i * 0.25]}>
-              <cylinderGeometry args={[1.15, 1.15, 0.022, 48]} />
-              <meshToonMaterial color={i % 2 ? '#3b2b23' : '#4a3126'} gradientMap={gradient ?? undefined} />
-            </mesh>
-          ))}
-        </group>
-      )}
-    </group>
-  );
-}
-
-/** Floating music notes while playing — a light, purely sprite-based touch. */
-function MusicNotes({ active }: { active: boolean }) {
-  const group = useRef<THREE.Group>(null);
-  const tex = useMemo(() => glowTexture(), []);
-  useFrame((state) => {
-    if (!group.current) return;
-    const t = state.clock.elapsedTime;
-    group.current.children.forEach((child, i) => {
-      const phase = (t * 0.35 + i * 0.37) % 1;
-      child.position.y = 0.9 + phase * 1.7;
-      child.position.x = Math.sin((t + i) * 1.1) * 0.22 + (i - 1) * 0.34;
-      const mat = (child as THREE.Sprite).material as THREE.SpriteMaterial;
-      mat.opacity = active ? Math.sin(phase * Math.PI) * 0.7 : 0;
-      const s = 0.16 + Math.sin(phase * Math.PI) * 0.08;
-      child.scale.setScalar(s);
-    });
-  });
-  return (
-    <group ref={group} position={[-0.6, 0, 0.2]}>
-      {[0, 1, 2, 3].map((i) => (
-        <sprite key={i} scale={0.001}>
-          <spriteMaterial
-            map={tex ?? undefined}
-            color={i % 2 ? '#ffd9a0' : '#ffb0c8'}
-            transparent
-            opacity={0}
-            depthWrite={false}
-            blending={THREE.AdditiveBlending}
-          />
-        </sprite>
-      ))}
     </group>
   );
 }
@@ -906,7 +1033,6 @@ function useIdleFrameloop(active: boolean) {
     const schedulePark = () => {
       if (idle) clearTimeout(idle);
       idle = setTimeout(() => {
-        // Only park when nothing is animating (record spinning, REC light…).
         if (!activeRef.current && !document.hidden) setParked(true);
       }, 2600);
     };
@@ -930,7 +1056,6 @@ function useIdleFrameloop(active: boolean) {
     };
   }, []);
 
-  // Anything in motion must render every frame; a still scene can park.
   if (active) return 'always' as const;
   return parked ? ('never' as const) : ('always' as const);
 }
@@ -939,7 +1064,7 @@ function useIdleFrameloop(active: boolean) {
 /* Public component                                                    */
 /* ------------------------------------------------------------------ */
 
-export function AnimeTurntablePlayer({
+export function TurntablePlayer({
   isPlaying,
   isNeedleDropping = false,
   vinylStyle = 'classic_red',
@@ -949,7 +1074,7 @@ export function AnimeTurntablePlayer({
   isRecording = false,
   detail = 'high',
   className = '',
-}: AnimeTurntablePlayerProps) {
+}: TurntablePlayerProps) {
   const frameloop = useIdleFrameloop(isPlaying || isNeedleDropping || isRecording);
   const spinning = isPlaying || isNeedleDropping;
 
@@ -957,22 +1082,26 @@ export function AnimeTurntablePlayer({
     <div
       className={`relative w-full h-full overflow-hidden ${className}`}
       style={{
-        // Layered radial washes stand in for the old HDR + fog: pure CSS, no GPU cost.
+        // Dark studio: warm tungsten above, cool shadow below — lets the
+        // brushed metal and the glossy vinyl carry the scene.
         background:
-          'radial-gradient(120% 90% at 50% 6%, #fff0d8 0%, #ffd9b8 18%, #e7a98f 42%, #7c4f57 72%, #2b1a22 100%)',
+          'radial-gradient(130% 95% at 50% -10%, #2b2320 0%, #211a17 40%, #151110 72%, #0b0908 100%)',
       }}
     >
-      {/* Sky "poster" arcs — static CSS, replaces a 3D wall */}
+      {/* Soft spotlight pool on the table */}
       <div
-        className="pointer-events-none absolute inset-0 opacity-45"
+        className="pointer-events-none absolute inset-x-0 bottom-0"
         style={{
           background:
-            'repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 46px)',
+            'radial-gradient(60% 42% at 50% 108%, rgba(214,166,110,0.24), transparent 70%)',
         }}
       />
       <div
         className="pointer-events-none absolute inset-0"
-        style={{ boxShadow: 'inset 0 -60px 120px -40px rgba(28,12,20,0.85), inset 0 40px 90px -50px rgba(255,240,210,0.6)' }}
+        style={{
+          boxShadow:
+            'inset 0 -70px 130px -50px rgba(0,0,0,0.9), inset 0 46px 90px -60px rgba(255,215,170,0.14)',
+        }}
       />
 
       <Canvas
@@ -980,32 +1109,34 @@ export function AnimeTurntablePlayer({
         dpr={[1, 1.6]}
         shadows={{ type: THREE.PCFSoftShadowMap }}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
-        camera={{ position: [0.2, 3.0, 5.1], fov: 38 }}
+        camera={{ position: [1.15, 2.75, 5.35], fov: 36 }}
       >
         <ProceduralEnv />
 
-        <ambientLight intensity={0.7} color="#ffe9cf" />
-        <hemisphereLight args={['#fff3e0', '#4a2f2a', 0.55]} />
+        <ambientLight intensity={0.55} color="#ffedda" />
+        <hemisphereLight args={['#fff1e2', '#1a1412', 0.5]} />
+        {/* Key light — soft, from the front-left */}
         <directionalLight
-          position={[4.2, 6.4, 3.4]}
-          intensity={1.6}
-          color="#fff4e2"
+          position={[3.6, 6.2, 4.4]}
+          intensity={2.3}
+          color="#fff3e0"
           castShadow
           shadow-mapSize-width={1024}
           shadow-mapSize-height={1024}
-          shadow-camera-left={-4.5}
-          shadow-camera-right={4.5}
-          shadow-camera-top={4.5}
-          shadow-camera-bottom={-4.5}
+          shadow-camera-left={-4.2}
+          shadow-camera-right={4.2}
+          shadow-camera-top={4.2}
+          shadow-camera-bottom={-4.2}
           shadow-camera-far={18}
           shadow-bias={-0.0004}
         />
-        {/* Cool rim light from behind-left: the classic anime double-edge */}
-        <directionalLight position={[-5, 2.6, -4]} intensity={0.75} color="#9fd0ff" />
-        <pointLight position={[0, 1.4, 2.8]} intensity={0.55} distance={7} decay={2} color="#ffb877" />
+        {/* Cool rim light from the back to separate the plinth from the dark */}
+        <directionalLight position={[-4.5, 3.2, -4.5]} intensity={0.9} color="#a8c8ff" />
+        {/* Warm fill across the deck */}
+        <pointLight position={[0, 1.6, 2.6]} intensity={0.6} distance={8} decay={2} color="#ffb877" />
 
-        <group position={[0, -0.35, 0]}>
-          <TableAndProps detail={detail} title={title} recipientName={recipientName} />
+        <group position={[0, 0, 0]}>
+          <StudioTable detail={detail} />
           <Chassis isRecording={isRecording} isPlaying={spinning} />
           <PlatterAndRecord
             isPlaying={isPlaying}
@@ -1014,21 +1145,9 @@ export function AnimeTurntablePlayer({
             title={title}
             recipientName={recipientName}
             senderName={senderName}
+            detail={detail}
           />
-          <Tonearm isPlaying={isPlaying} isNeedleDropping={isNeedleDropping} />
-          <MusicNotes active={isPlaying} />
-          {detail === 'high' && (
-            <Sparkles
-              count={38}
-              scale={[7.4, 2.6, 4.6]}
-              position={[0, 1.5, 0]}
-              size={2.4}
-              speed={0.22}
-              opacity={0.5}
-              color="#ffe4b0"
-              noise={0.6}
-            />
-          )}
+          <Tonearm isPlaying={isPlaying} isNeedleDropping={isNeedleDropping} detail={detail} />
         </group>
 
         <OrbitControls
@@ -1037,16 +1156,16 @@ export function AnimeTurntablePlayer({
           dampingFactor={0.08}
           minPolarAngle={Math.PI / 9}
           maxPolarAngle={Math.PI / 2.15}
-          minDistance={3.6}
-          maxDistance={8.4}
-          target={[0, 0.45, 0]}
+          minDistance={3.4}
+          maxDistance={8.6}
+          target={[0, 0.5, 0]}
         />
       </Canvas>
 
-      {/* Minimal status chrome (no blur, no grain) */}
+      {/* Minimal status chrome */}
       <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
-        <span className="rounded-full border border-white/25 bg-black/35 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-100">
-          {spinning ? (isNeedleDropping ? 'needle dropping' : '33⅓ rpm · playing') : 'idle · drag to orbit'}
+        <span className="rounded-full border border-white/15 bg-black/45 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-100">
+          {spinning ? (isNeedleDropping ? 'the needle lands…' : 'now playing') : 'drag to find your angle'}
         </span>
         {isRecording && (
           <span className="flex items-center gap-1.5 rounded-full border border-red-300/40 bg-red-600/85 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-white">
@@ -1058,4 +1177,5 @@ export function AnimeTurntablePlayer({
   );
 }
 
-export default AnimeTurntablePlayer;
+export { TurntablePlayer as AnimeTurntablePlayer };
+export default TurntablePlayer;

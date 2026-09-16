@@ -13,8 +13,9 @@ import {
   Music, 
   Sparkles, 
   Volume2, 
-  Check, 
-  Plus 
+  Check,
+  Plus,
+  Scissors
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -37,6 +38,13 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
   const [uploadCategory, setUploadCategory] = useState<AudioCategory>('bg_music');
   const [uploadIsPremium, setUploadIsPremium] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
+  const [uploadDuration, setUploadDuration] = useState<number>(0);
+  const [trimEnabled, setTrimEnabled] = useState<boolean>(false);
+  const [trimStart, setTrimStart] = useState<number>(0);
+  const [trimEnd, setTrimEnd] = useState<number>(0);
+  const [uploadInputKey, setUploadInputKey] = useState<number>(0);
+  const uploadPreviewRef = useRef<HTMLAudioElement | null>(null);
 
   // Live Browser Mic Recorder Widget
   const [isRecordingMic, setIsRecordingMic] = useState<boolean>(false);
@@ -55,38 +63,106 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
   const micChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. File Upload
+  // 1. File Upload. The browser sends bytes directly to R2; the Vercel API
+  // receives only an intent request and the final metadata row.
+  const uploadAsset = async (input: {
+    file: File;
+    title: string;
+    category: AudioCategory;
+    isPremiumOnly: boolean;
+    durationSeconds: number;
+    trimStartSeconds: number;
+    trimEndSeconds: number;
+  }): Promise<AudioAsset> => {
+    const intentRes = await fetch('/api/audio/upload-asset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create_upload',
+        filename: input.file.name,
+        contentType: input.file.type,
+        size: input.file.size,
+      }),
+    });
+    const intent = await intentRes.json();
+    if (!intentRes.ok) throw new Error(intent.error || 'Could not prepare persistent upload.');
+
+    const uploadRes = await fetch(intent.uploadUrl, {
+      method: 'PUT',
+      headers: intent.headers || { 'Content-Type': input.file.type },
+      body: input.file,
+    });
+    if (!uploadRes.ok) {
+      const failure = await uploadRes.json().catch(() => ({}));
+      throw new Error(failure.error || `Object upload failed (${uploadRes.status}).`);
+    }
+
+    const completeRes = await fetch('/api/audio/upload-asset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'complete_upload',
+        assetId: intent.assetId,
+        key: intent.key,
+        intent: intent.intent,
+        filename: input.file.name,
+        contentType: input.file.type,
+        size: input.file.size,
+        title: input.title,
+        category: input.category,
+        isPremiumOnly: input.isPremiumOnly,
+        durationSeconds: input.durationSeconds,
+        trimStartSeconds: input.trimStartSeconds,
+        trimEndSeconds: input.trimEndSeconds,
+      }),
+    });
+    const completed = await completeRes.json();
+    if (!completeRes.ok || !completed.asset) throw new Error(completed.error || 'Could not save the uploaded asset.');
+    return completed.asset as AudioAsset;
+  };
+
+  const clearUploadSelection = () => {
+    if (uploadPreviewRef.current) uploadPreviewRef.current.pause();
+    setUploadPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+    setUploadFile(null);
+    setUploadTitle('');
+    setUploadDuration(0);
+    setTrimEnabled(false);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setUploadInputKey((value) => value + 1);
+  };
+
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadFile) {
       toast.error('Please choose an audio file to upload');
       return;
     }
+    if (trimEnabled && trimEnd - trimStart < 0.1) {
+      toast.error('Choose an audio section at least 0.1 seconds long.');
+      return;
+    }
 
     try {
       setIsUploading(true);
-      const formData = new FormData();
-      formData.append('file', uploadFile);
-      formData.append('title', uploadTitle.trim() || uploadFile.name);
-      formData.append('category', uploadCategory);
-      formData.append('is_premium_only', uploadIsPremium.toString());
-
-      const res = await fetch('/api/audio/upload-asset', {
-        method: 'POST',
-        body: formData,
+      const asset = await uploadAsset({
+        file: uploadFile,
+        title: uploadTitle.trim() || uploadFile.name,
+        category: uploadCategory,
+        isPremiumOnly: uploadIsPremium,
+        durationSeconds: uploadDuration,
+        trimStartSeconds: trimEnabled ? trimStart : 0,
+        trimEndSeconds: trimEnabled ? trimEnd : uploadDuration,
       });
-
-      const data = await res.json();
-      if (data.success && data.asset) {
-        toast.success(`Asset "${data.asset.title}" uploaded!`);
-        onAssetAdded(data.asset);
-        setUploadFile(null);
-        setUploadTitle('');
-      } else {
-        throw new Error(data.error || 'Upload failed');
-      }
+      toast.success(`Asset "${asset.title}" uploaded and available in Studio.`);
+      onAssetAdded(asset);
+      clearUploadSelection();
     } catch (err: any) {
-      toast.error(err.message || 'Error uploading asset');
+      toast.error(err.message || 'Error uploading asset', { duration: 7000 });
     } finally {
       setIsUploading(false);
     }
@@ -148,29 +224,22 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
         type: 'audio/webm',
       });
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('title', micTitle);
-      formData.append('category', micCategory);
-      formData.append('is_premium_only', 'false');
-
-      const res = await fetch('/api/audio/upload-asset', {
-        method: 'POST',
-        body: formData,
+      const asset = await uploadAsset({
+        file,
+        title: micTitle,
+        category: micCategory,
+        isPremiumOnly: false,
+        durationSeconds: micDuration,
+        trimStartSeconds: 0,
+        trimEndSeconds: micDuration,
       });
-
-      const data = await res.json();
-      if (data.success && data.asset) {
-        toast.success(`Microphone asset "${data.asset.title}" saved!`);
-        onAssetAdded(data.asset);
-        setRecordedBlob(null);
-        setMicPreviewUrl((previousUrl) => {
-          if (previousUrl) URL.revokeObjectURL(previousUrl);
-          return null;
-        });
-      } else {
-        throw new Error(data.error || 'Failed to save recording');
-      }
+      toast.success(`Microphone asset "${asset.title}" saved!`);
+      onAssetAdded(asset);
+      setRecordedBlob(null);
+      setMicPreviewUrl((previousUrl) => {
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        return null;
+      });
     } catch (err: any) {
       toast.error(err.message || 'Failed to save recording');
     } finally {
@@ -222,6 +291,7 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
     } else {
       if (playerRef.current) {
         playerRef.current.src = asset.file_url;
+        playerRef.current.currentTime = Math.max(0, asset.trim_start_seconds || 0);
         playerRef.current.play()
           .then(() => setPlayingAssetId(asset.id))
           .catch(() => {
@@ -231,6 +301,12 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
       }
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (uploadPreviewUrl) URL.revokeObjectURL(uploadPreviewUrl);
+    };
+  }, [uploadPreviewUrl]);
 
   useEffect(() => {
     return () => {
@@ -304,18 +380,134 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
                 Select MP3 / WAV File
               </label>
               <input
+                key={uploadInputKey}
                 type="file"
-                accept="audio/*"
+                accept="audio/*,.m4a,.flac,.aac,.opus"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f) {
-                    setUploadFile(f);
-                    if (!uploadTitle) setUploadTitle(f.name.replace(/\.[^/.]+$/, ''));
-                  }
+                  if (!f) return;
+                  if (uploadPreviewUrl) URL.revokeObjectURL(uploadPreviewUrl);
+                  const previewUrl = URL.createObjectURL(f);
+                  setUploadFile(f);
+                  setUploadPreviewUrl(previewUrl);
+                  setUploadDuration(0);
+                  setTrimEnabled(false);
+                  setTrimStart(0);
+                  setTrimEnd(0);
+                  if (!uploadTitle) setUploadTitle(f.name.replace(/\.[^/.]+$/, ''));
                 }}
                 className="w-full text-xs text-stone-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-stone-800 file:text-amber-300 hover:file:bg-stone-700 cursor-pointer"
               />
             </div>
+
+            {uploadPreviewUrl && (
+              <div className="rounded-2xl border border-amber-900/40 bg-stone-950/80 p-3 space-y-3">
+                <audio
+                  ref={uploadPreviewRef}
+                  src={uploadPreviewUrl}
+                  controls
+                  preload="metadata"
+                  className="h-9 w-full"
+                  onLoadedMetadata={(event) => {
+                    const duration = Number(event.currentTarget.duration);
+                    if (!Number.isFinite(duration) || duration <= 0) return;
+                    setUploadDuration(duration);
+                    setTrimStart(0);
+                    setTrimEnd(duration);
+                  }}
+                  onPlay={(event) => {
+                    if (trimEnabled && (event.currentTarget.currentTime < trimStart || event.currentTarget.currentTime >= trimEnd)) {
+                      event.currentTarget.currentTime = trimStart;
+                    }
+                  }}
+                  onTimeUpdate={(event) => {
+                    if (trimEnabled && trimEnd > trimStart && event.currentTarget.currentTime >= trimEnd) {
+                      event.currentTarget.pause();
+                      event.currentTarget.currentTime = trimStart;
+                    }
+                  }}
+                />
+
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-amber-200">
+                  <input
+                    type="checkbox"
+                    checked={trimEnabled}
+                    disabled={uploadDuration <= 0}
+                    onChange={(event) => setTrimEnabled(event.target.checked)}
+                    className="accent-amber-500"
+                  />
+                  <Scissors className="h-3.5 w-3.5" />
+                  Use only a specific section
+                </label>
+
+                {trimEnabled && uploadDuration > 0 && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-[10px] font-mono text-stone-400">
+                        Start (seconds)
+                        <input
+                          type="number"
+                          min={0}
+                          max={Math.max(0, trimEnd - 0.1)}
+                          step={0.1}
+                          value={Number(trimStart.toFixed(1))}
+                          onChange={(event) => setTrimStart(Math.max(0, Math.min(Number(event.target.value), trimEnd - 0.1)))}
+                          className="mt-1 w-full rounded-lg border border-stone-700 bg-stone-900 px-2 py-1.5 text-xs text-stone-100"
+                        />
+                      </label>
+                      <label className="text-[10px] font-mono text-stone-400">
+                        End (seconds)
+                        <input
+                          type="number"
+                          min={trimStart + 0.1}
+                          max={uploadDuration}
+                          step={0.1}
+                          value={Number(trimEnd.toFixed(1))}
+                          onChange={(event) => setTrimEnd(Math.min(uploadDuration, Math.max(Number(event.target.value), trimStart + 0.1)))}
+                          className="mt-1 w-full rounded-lg border border-stone-700 bg-stone-900 px-2 py-1.5 text-xs text-stone-100"
+                        />
+                      </label>
+                    </div>
+                    <div className="space-y-1">
+                      <input
+                        aria-label="Trim start"
+                        type="range"
+                        min={0}
+                        max={uploadDuration}
+                        step={0.1}
+                        value={trimStart}
+                        onChange={(event) => setTrimStart(Math.min(Number(event.target.value), trimEnd - 0.1))}
+                        className="w-full accent-amber-500"
+                      />
+                      <input
+                        aria-label="Trim end"
+                        type="range"
+                        min={0}
+                        max={uploadDuration}
+                        step={0.1}
+                        value={trimEnd}
+                        onChange={(event) => setTrimEnd(Math.max(Number(event.target.value), trimStart + 0.1))}
+                        className="w-full accent-amber-600"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] font-mono text-stone-400">
+                      <span>Selected: {(trimEnd - trimStart).toFixed(1)}s of {uploadDuration.toFixed(1)}s</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!uploadPreviewRef.current) return;
+                          uploadPreviewRef.current.currentTime = trimStart;
+                          uploadPreviewRef.current.play().catch(() => toast.error('Preview could not be played.'));
+                        }}
+                        className="rounded-lg border border-amber-700/50 px-2 py-1 text-amber-300 hover:bg-amber-950/50"
+                      >
+                        Preview cut
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="pt-2">
@@ -465,6 +657,9 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
                     <h4 className="text-sm font-medium text-stone-100">{asset.title}</h4>
                     <div className="flex items-center gap-2 text-[10px] font-mono text-stone-400">
                       <span className="capitalize">{asset.category.replace('_', ' ')}</span>
+                      {asset.trim_end_seconds && asset.trim_end_seconds > (asset.trim_start_seconds || 0) && (
+                        <span className="text-sky-300">• cut {(asset.trim_start_seconds || 0).toFixed(1)}s–{asset.trim_end_seconds.toFixed(1)}s</span>
+                      )}
                       {asset.is_premium_only && (
                         <span className="text-amber-400 font-bold">• Gold Master Exclusive</span>
                       )}
@@ -502,7 +697,18 @@ export const AdminAudioStudioTab: React.FC<AdminAudioStudioTabProps> = ({
         </div>
       </div>
 
-      <audio ref={playerRef} onEnded={() => setPlayingAssetId(null)} className="hidden" />
+      <audio
+        ref={playerRef}
+        onTimeUpdate={(event) => {
+          const asset = assets.find((item) => item.id === playingAssetId);
+          if (!asset?.trim_end_seconds || event.currentTarget.currentTime < asset.trim_end_seconds) return;
+          event.currentTarget.pause();
+          event.currentTarget.currentTime = Math.max(0, asset.trim_start_seconds || 0);
+          setPlayingAssetId(null);
+        }}
+        onEnded={() => setPlayingAssetId(null)}
+        className="hidden"
+      />
     </div>
   );
 };

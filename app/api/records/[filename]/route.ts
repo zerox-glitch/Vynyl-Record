@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serveAudioFile } from '@/lib/audio/storage';
+import { getRecordingForAudioFilename } from '@/lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,10 @@ export async function GET(
   { params }: { params: { filename: string } }
 ) {
   try {
+    const recording = await getRecordingForAudioFilename(params.filename);
+    if (recording?.visibility === 'private') {
+      return new NextResponse('Audio file not found', { status: 404 });
+    }
     return serveAudioFile(req, params.filename);
   } catch (error: any) {
     console.error('[RecordsRoute] streaming error:', error);
