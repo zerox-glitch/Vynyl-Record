@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getRecordingBySlug } from '@/lib/db';
 import { getStorage } from '@/lib/storage/r2';
+import { getCustomerUser } from '@/lib/supabase/auth';
+import { resolveUserEntitlement } from '@/lib/entitlements';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,9 +12,25 @@ export async function GET(
   { params }: { params: { slug: string } }
 ) {
   try {
-    const recording = await getRecordingBySlug(params.slug, { kind: 'anonymous' });
+    const user = await getCustomerUser();
+    const viewer = user ? { kind: 'user' as const, userId: user.id } : { kind: 'anonymous' as const };
+    const recording = await getRecordingBySlug(params.slug, viewer);
     if (!recording) {
       return NextResponse.json({ error: 'Vinyl recording not found.' }, { status: 404 });
+    }
+
+    // Enforce download entitlement server-side
+    const entitlement = await resolveUserEntitlement(user?.id || 'anonymous', recording.id);
+    if (!entitlement.enabledFeatures.canDownload) {
+      // For owner, check if recording itself has premium entitlement
+      const isOwner = user && recording.user_id === user.id;
+      if (!isOwner) {
+        return NextResponse.json({ error: 'Download requires premium. Upgrade your plan or purchase this recording.' }, { status: 403 });
+      }
+      // Owner without download entitlement still needs premium? Free plan can_download false, so block
+      if (!entitlement.isPremium && !recording.entitlement_plan_id) {
+        return NextResponse.json({ error: 'Download requires premium entitlement for this recording.' }, { status: 403 });
+      }
     }
 
     if (recording.processed_storage_key && getStorage().isR2Configured) {

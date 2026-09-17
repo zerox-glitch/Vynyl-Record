@@ -3,6 +3,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Navbar } from '@/components/ui/Navbar';
 import { Footer } from '@/components/ui/Footer';
 import { AudioRecorder } from '@/components/studio/AudioRecorder';
@@ -22,15 +23,17 @@ import {
   PricingPlan,
   OccasionType,
   OCCASIONS,
+  ResolvedEntitlement,
 } from '@/types';
 import { 
   DEFAULT_AUDIO_ASSETS, 
   DEFAULT_PRICING_PLANS 
 } from '@/lib/constants';
 import { DEFAULT_VINYL_PRESET_ID, type VinylPreset } from '@/lib/audio/presets';
-import { Disc3, Send, Crown, User, Heart, Mic2, Sparkles, Music2 } from 'lucide-react';
+import { Disc3, Send, Crown, User, Heart, Mic2, Sparkles, Music2, LogIn, Shield } from 'lucide-react';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 const AnimeTurntablePlayer = dynamic(
   () => import('@/components/3d/AnimeTurntablePlayer').then((m) => m.AnimeTurntablePlayer),
@@ -84,37 +87,60 @@ function StudioContent() {
   const [wowFlutter, setWowFlutter] = useState<number>(0.12);
   const [introDelay, setIntroDelay] = useState<number>(1.15);
   const [vinylStyle, setVinylStyle] = useState<VinylStyleType>('classic_red');
+  const [visibility, setVisibility] = useState<'public'|'unlisted'|'private'>('unlisted');
 
   // Dynamic Data & Plans
   const [audioAssets, setAudioAssets] = useState<AudioAsset[]>(DEFAULT_AUDIO_ASSETS);
   const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>(DEFAULT_PRICING_PLANS);
-  const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [resolvedEntitlement, setResolvedEntitlement] = useState<ResolvedEntitlement | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   // Modals & Lathe Processing
   const [isProcessingModalOpen, setIsProcessingModalOpen] = useState<boolean>(false);
   const [latheStepIndex, setLatheStepIndex] = useState<number>(0);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [pendingPerRecordingPlan, setPendingPerRecordingPlan] = useState<PricingPlan | null>(null);
 
-  // Restore the selected tier and verify completed checkout redirects.
+  // Load entitlement server-side
+  async function loadEntitlement() {
+    try {
+      const res = await fetch('/api/entitlements/me', { cache: 'no-store' });
+      const data = await res.json();
+      if (data.entitlement) {
+        setResolvedEntitlement(data.entitlement);
+        setUserId(data.userId);
+      }
+    } catch {}
+  }
+
+  // Verify checkout redirects and load entitlement
   useEffect(() => {
-    const storedPlanId = window.localStorage.getItem('vynyl_active_plan_id');
-    if (storedPlanId) {
-      setActivePlanId(storedPlanId);
+    loadEntitlement();
+
+    const supabase = createSupabaseBrowserClient();
+    if (supabase) {
+      supabase.auth.getUser().then(({ data }) => {
+        if (data.user) {
+          setUserId(data.user.id);
+          setUserEmail(data.user.email || null);
+        }
+      });
     }
 
     const sessionId = searchParams.get('session_id');
     const planId = searchParams.get('plan');
+    const recordingId = searchParams.get('recording_id');
     if (!sessionId || !planId) return;
 
-    fetch(`/api/checkout?session_id=${encodeURIComponent(sessionId)}&plan=${encodeURIComponent(planId)}`)
+    fetch(`/api/checkout?session_id=${encodeURIComponent(sessionId)}&plan=${encodeURIComponent(planId)}${recordingId ? `&recording_id=${encodeURIComponent(recordingId)}` : ''}`)
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok || !data.verified) throw new Error(data.error || 'Payment verification failed');
-        setActivePlanId(data.planId);
-        window.localStorage.setItem('vynyl_active_plan_id', data.planId);
-        toast.success('🎉 Gold Master tier unlocked!');
+        toast.success('🎉 Premium unlocked!');
         confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+        await loadEntitlement();
         router.replace('/studio');
       })
       .catch((error) => toast.error(error.message));
@@ -159,14 +185,38 @@ function StudioContent() {
     setRecordingState(state);
   };
 
-  const currentPlan = pricingPlans.find((p) => p.id === activePlanId) || pricingPlans.find((p) => p.price_cents === 0) || pricingPlans[0];
-  const isPremium = Boolean(currentPlan && currentPlan.price_cents > 0);
-  const maxDuration = currentPlan?.max_duration_seconds || 60;
+  const currentPlan = resolvedEntitlement?.effectivePlan || pricingPlans.find((p) => p.price_cents === 0) || pricingPlans[0];
+  const isPremium = !!resolvedEntitlement?.isPremium;
+  const maxDuration = resolvedEntitlement?.durationLimit || currentPlan?.max_duration_seconds || 60;
   const isOverDurationLimit = !isPremium && recordedDuration > maxDuration;
+  const canUsePrivate = resolvedEntitlement?.enabledFeatures?.canUsePrivateVisibility || currentPlan?.can_use_private_visibility || false;
+  const canDownload = resolvedEntitlement?.enabledFeatures?.canDownload || currentPlan?.can_download || false;
 
-  // Submit to the direct-upload + async processing pipeline. The browser
-  // uploads bytes directly to R2 (or the signed local fallback), then this
-  // lightweight request creates the durable job. No FFmpeg runs in Vercel.
+  const handlePerRecordingCheckout = async (plan: PricingPlan, recordingId?: string | null) => {
+    // If we have a recordingId, it's for an existing record. For new record, we need to preserve audioBlob
+    if (!userId) {
+      // Preserve audioBlob in memory (already in state) and redirect to login with next
+      toast('Please sign in to purchase premium for this recording. Your audio is preserved.', { icon: '🔒' });
+      router.push(`/login?next=${encodeURIComponent('/studio')}`);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId: plan.id, recordingId: recordingId || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Checkout failed');
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
   const handleSubmitAndPressWax = async () => {
     if (!audioBlob) {
       toast.error('Please record or upload your voice note first.');
@@ -175,6 +225,38 @@ function StudioContent() {
     if (!title.trim()) {
       toast.error('Please give your memory a title.');
       return;
+    }
+
+    // Strongly encourage login before persistent record
+    if (!userId) {
+      toast('Sign in to keep your record private and permanent. You can continue as guest for now.', { icon: '👋', duration: 4000 });
+      // Allow guest but warn - preserve audioBlob in state (already)
+    }
+
+    // Check entitlement for requested features
+    const requestedFeatures = {
+      filter: filterPreset,
+      vinylStyle,
+      bgMusic: selectedBgMusicId,
+      privateVis: visibility === 'private',
+    };
+
+    // If user is not premium and requests premium features, offer per-recording checkout
+    if (!isPremium) {
+      const needsPremium =
+        (currentPlan && !currentPlan.allowed_filter_presets.includes(filterPreset)) ||
+        (currentPlan && !currentPlan.allowed_vinyl_styles.includes(vinylStyle)) ||
+        (visibility === 'private' && !canUsePrivate);
+
+      if (needsPremium) {
+        const perRecPlan = pricingPlans.find(p => p.billing_model === 'per_recording' && p.is_active);
+        if (perRecPlan) {
+          setPendingPerRecordingPlan(perRecPlan);
+          toast('This recording needs premium features. You can unlock just this record for $9 or upgrade account-wide.', { icon: '💎', duration: 6000 });
+          setIsUpgradeModalOpen(true);
+          return;
+        }
+      }
     }
 
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -189,8 +271,6 @@ function StudioContent() {
         : audioBlob.type.includes('mp4') ? 'voice.m4a' : 'voice.webm';
       const contentType = audioBlob.type || (sourceName.endsWith('.m4a') ? 'audio/mp4' : 'audio/webm');
 
-      // 1. Request a one-time upload capability. The response contains no R2
-      // credentials and is scoped to this record id + file type + max bytes.
       const intentRes = await fetch('/api/audio/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -206,8 +286,6 @@ function StudioContent() {
 
       setLatheStepIndex(1);
 
-      // 2. Upload the bytes directly. R2 mode uses a presigned PUT; local mode
-      // uses the same PUT contract against the signed confirmation route.
       const uploadRes = await fetch(intent.uploadUrl, {
         method: 'PUT',
         headers: intent.headers,
@@ -218,7 +296,6 @@ function StudioContent() {
 
       setLatheStepIndex(2);
 
-      // 3. Create the lightweight DB row + durable audio_master job.
       const queueRes = await fetch('/api/audio/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -243,6 +320,10 @@ function StudioContent() {
           occasionDate,
           sideALabel: sideALabel.trim(),
           sideBLabel: sideBLabel.trim(),
+          visibility,
+          // entitlement info for reprocessing persistence
+          entitlementPlanId: resolvedEntitlement?.effectivePlan?.id || currentPlan?.id,
+          entitlementSource: resolvedEntitlement?.source || 'free',
         }),
       });
       const queued = await queueRes.json();
@@ -251,8 +332,6 @@ function StudioContent() {
       setLatheStepIndex(3);
       toast.success('Your record is being pressed…', { duration: 4000 });
 
-      // 4. Poll only tiny JSON status. The worker updates the row; when it
-      // completes we navigate to the finished share page.
       pollTimer = setInterval(async () => {
         try {
           const statusRes = await fetch(`/api/processing/status/${encodeURIComponent(recordId)}`, { cache: 'no-store' });
@@ -270,9 +349,7 @@ function StudioContent() {
             setIsSubmitting(false);
             toast.error(status?.recording?.error || 'The press failed. You can try again.');
           }
-        } catch {
-          // A transient poll failure should not cancel a durable job.
-        }
+        } catch {}
       }, 2500);
     } catch (err: any) {
       if (pollTimer) clearInterval(pollTimer);
@@ -294,22 +371,32 @@ function StudioContent() {
             </span>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-stone-700 text-stone-300 text-xs font-mono">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Single view · no full screen</span>
+              <span>Entitlement: {resolvedEntitlement?.effectivePlan?.name || 'Loading…'} {isPremium ? '• Premium' : '• Free'}</span>
             </span>
+            {!userId && (
+              <Link href={`/login?next=${encodeURIComponent('/studio')}`} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 border border-amber-700/30 text-amber-300 text-xs">
+                <LogIn className="w-3 h-3" /> Sign in to save privately
+              </Link>
+            )}
           </div>
           <h1 className="text-3xl sm:text-4xl font-serif font-bold text-stone-100 tracking-tight">
             The Sender Studio
           </h1>
           <p className="text-sm text-stone-400 max-w-2xl leading-relaxed">
-            Record right here — the 3D turntable below stays put, nothing jumps to full screen. The press server mixes your voice, the vintage filter, background music and crackle into <span className="text-amber-300 font-bold">one gain-compensated MP3</span> so it lands around −26 dB instead of the buried-quiet −38 dB mixes of before.
+            Record right here — entitlement is resolved server-side. Premium features are locked unless your account or this specific recording is entitled. <span className="text-amber-300 font-bold">No localStorage plan is trusted.</span>
           </p>
+          {resolvedEntitlement && (
+            <div className="text-xs text-stone-500 font-mono">
+              Plan: {resolvedEntitlement.effectivePlan?.name} • Duration limit: {Math.floor((resolvedEntitlement.durationLimit||60)/60)} min • Remaining: {resolvedEntitlement.remainingUsage ?? '—'} • Source: {resolvedEntitlement.source} {resolvedEntitlement.expiration ? `• Expires ${new Date(resolvedEntitlement.expiration).toLocaleDateString()}` : ''}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
           {isPremium ? (
             <div className="flex items-center gap-2 bg-gradient-to-r from-amber-600/20 to-amber-800/30 border border-amber-500/50 px-4 py-2 rounded-xl text-amber-300 text-xs font-mono">
               <Crown className="w-4 h-4 text-amber-400" />
-              <span>Gold Master (10 Min)</span>
+              <span>{currentPlan?.name} • {Math.floor(maxDuration/60)} Min</span>
             </div>
           ) : (
             <Button variant="outline" size="md" onClick={() => setIsUpgradeModalOpen(true)} leftIcon={<Crown className="w-4 h-4 text-amber-400" />}>
@@ -319,8 +406,7 @@ function StudioContent() {
         </div>
       </div>
 
-      {/* Live 3D preview — same component as the listening page, so what you
-          see while recording is what the recipient gets. */}
+      {/* Live 3D preview */}
       <div className="relative overflow-hidden rounded-3xl border border-amber-900/30 shadow-2xl">
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between p-3">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-black/35 px-3 py-1 font-mono text-[11px] text-amber-100">
@@ -331,9 +417,7 @@ function StudioContent() {
           </span>
         </div>
         <div className="h-[330px] w-full sm:h-[380px]">
-          <Suspense
-            fallback={<div className="flex h-full items-center justify-center bg-stone-950"><Disc3 className="h-8 w-8 animate-spin text-amber-500" /></div>}
-          >
+          <Suspense fallback={<div className="flex h-full items-center justify-center bg-stone-950"><Disc3 className="h-8 w-8 animate-spin text-amber-500" /></div>}>
             <AnimeTurntablePlayer
               isPlaying={recordingState === 'recording'}
               isRecording={recordingState === 'recording'}
@@ -349,24 +433,16 @@ function StudioContent() {
 
       {/* Studio Workspace Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left Column: Live Audio Capture & Dedication Details */}
+        {/* Left Column */}
         <div className="lg:col-span-7 space-y-6">
-          {/* Step 1: Voice Note Capture Card */}
           <div className="p-6 rounded-3xl bg-stone-900/80 border border-amber-600/30 backdrop-blur-md shadow-2xl space-y-6">
             <div className="flex items-center justify-between border-b border-stone-800 pb-3">
               <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-amber-600 text-stone-950 font-bold flex items-center justify-center text-xs">
-                  1
-                </div>
-                <h3 className="font-serif font-bold text-lg text-amber-100">
-                  Capture Voice Memory
-                </h3>
+                <div className="w-7 h-7 rounded-full bg-amber-600 text-stone-950 font-bold flex items-center justify-center text-xs">1</div>
+                <h3 className="font-serif font-bold text-lg text-amber-100">Capture Voice Memory</h3>
               </div>
-              <span className="text-xs text-stone-400 font-mono">
-                {audioBlob ? 'Audio Locked' : 'Awaiting Input'}
-              </span>
+              <span className="text-xs text-stone-400 font-mono">{audioBlob ? 'Audio Locked' : 'Awaiting Input'}</span>
             </div>
-
             <AudioRecorder
               onAudioReady={handleAudioReady}
               onClearAudio={handleClearAudio}
@@ -377,54 +453,26 @@ function StudioContent() {
             />
           </div>
 
-          {/* Step 2: Memory Dedication & Engraving Card */}
           <div className="p-6 rounded-3xl bg-stone-900/80 border border-amber-600/30 backdrop-blur-md shadow-2xl space-y-4">
             <div className="flex items-center gap-2 border-b border-stone-800 pb-3">
-              <div className="w-7 h-7 rounded-full bg-amber-600 text-stone-950 font-bold flex items-center justify-center text-xs">
-                2
-              </div>
-              <h3 className="font-serif font-bold text-lg text-amber-100">
-                Engrave Dedication on Wax
-              </h3>
+              <div className="w-7 h-7 rounded-full bg-amber-600 text-stone-950 font-bold flex items-center justify-center text-xs">2</div>
+              <h3 className="font-serif font-bold text-lg text-amber-100">Engrave Dedication on Wax</h3>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-serif text-stone-300 mb-2 font-semibold">
-                  What are you creating?
-                </label>
+                <label className="block text-xs font-serif text-stone-300 mb-2 font-semibold">What are you creating?</label>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                   {OCCASIONS.map((item) => (
-                    <button
-                      type="button"
-                      key={item.id}
-                      onClick={() => setOccasion(item.id)}
-                      className={`rounded-xl border px-2 py-2 text-left text-[11px] transition-colors ${
-                        occasion === item.id
-                          ? 'border-amber-500 bg-amber-950/60 text-amber-200'
-                          : 'border-stone-700 bg-stone-950 text-stone-400 hover:border-amber-700/60 hover:text-amber-200'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
+                    <button type="button" key={item.id} onClick={() => setOccasion(item.id)} className={`rounded-xl border px-2 py-2 text-left text-[11px] transition-colors ${occasion === item.id ? 'border-amber-500 bg-amber-950/60 text-amber-200' : 'border-stone-700 bg-stone-950 text-stone-400 hover:border-amber-700/60 hover:text-amber-200'}`}>{item.label}</button>
                   ))}
                 </div>
-                <p className="mt-2 text-xs italic text-stone-500">
-                  {OCCASIONS.find((item) => item.id === occasion)?.prompt}
-                </p>
+                <p className="mt-2 text-xs italic text-stone-500">{OCCASIONS.find((item) => item.id === occasion)?.prompt}</p>
               </div>
 
               <div>
-                <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">
-                  Memory Title (Engraved on Center Disc)
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Our 50th Anniversary Letter"
-                  className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
+                <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Memory Title</label>
+                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Our 50th Anniversary Letter" className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500" />
               </div>
 
               <div>
@@ -433,196 +481,85 @@ function StudioContent() {
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div>
-                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Date</label>
-                  <input type="date" value={occasionDate} onChange={(e) => setOccasionDate(e.target.value)} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
-                </div>
-                <div>
-                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side A label</label>
-                  <input value={sideALabel} onChange={(e) => setSideALabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
-                </div>
-                <div>
-                  <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side B label</label>
-                  <input value={sideBLabel} onChange={(e) => setSideBLabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" />
-                </div>
+                <div><label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Date</label><input type="date" value={occasionDate} onChange={(e) => setOccasionDate(e.target.value)} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" /></div>
+                <div><label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side A label</label><input value={sideALabel} onChange={(e) => setSideALabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" /></div>
+                <div><label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Side B label</label><input value={sideBLabel} onChange={(e) => setSideBLabel(e.target.value)} maxLength={80} className="w-full rounded-xl border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none" /></div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-serif text-stone-300 mb-1.5 flex items-center gap-1.5 font-semibold">
-                    <Heart className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Recipient Name</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={recipientName}
-                    onChange={(e) => setRecipientName(e.target.value)}
-                    placeholder="e.g. Eleanor Vance"
-                    className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
-                </div>
+                <div><label className="block text-xs font-serif text-stone-300 mb-1.5 flex items-center gap-1.5 font-semibold"><Heart className="w-3.5 h-3.5 text-amber-500" /><span>Recipient Name</span></label><input type="text" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder="e.g. Eleanor Vance" className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500" /></div>
+                <div><label className="block text-xs font-serif text-stone-300 mb-1.5 flex items-center gap-1.5 font-semibold"><User className="w-3.5 h-3.5 text-amber-500" /><span>Sender Name</span></label><input type="text" value={senderName} onChange={(e) => setSenderName(e.target.value)} placeholder="e.g. Arthur" className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500" /></div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-serif text-stone-300 mb-1.5 flex items-center gap-1.5 font-semibold">
-                    <User className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Sender Name</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={senderName}
-                    onChange={(e) => setSenderName(e.target.value)}
-                    placeholder="e.g. Arthur"
-                    className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
+              <div>
+                <label className="block text-xs font-serif text-stone-300 mb-1.5 font-semibold">Visibility</label>
+                <div className="flex gap-2">
+                  {(['public','unlisted','private'] as const).map(v => {
+                    const disabled = v === 'private' && !canUsePrivate;
+                    return (
+                      <button key={v} type="button" disabled={disabled} onClick={() => setVisibility(v)} className={`px-3 py-2 rounded-xl text-xs border ${visibility === v ? 'bg-amber-600/20 border-amber-500 text-amber-200' : 'bg-stone-950 border-stone-700 text-stone-400'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {v} {disabled && <Shield className="inline w-3 h-3 ml-1" />}
+                      </button>
+                    );
+                  })}
                 </div>
+                {!canUsePrivate && <p className="text-[11px] text-stone-500 mt-1">Private visibility requires premium.</p>}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Analog Audio Mastering & Customization */}
+        {/* Right Column */}
         <div className="lg:col-span-5 space-y-6">
           <div className="p-6 rounded-3xl bg-stone-900/80 border border-amber-600/30 backdrop-blur-md shadow-2xl space-y-6">
             <div className="flex items-center gap-2 border-b border-stone-800 pb-3">
-              <div className="w-7 h-7 rounded-full bg-amber-600 text-stone-950 font-bold flex items-center justify-center text-xs">
-                3
-              </div>
-              <h3 className="font-serif font-bold text-lg text-amber-100">
-                Acoustic Mastering & Vinyl Style
-              </h3>
+              <div className="w-7 h-7 rounded-full bg-amber-600 text-stone-950 font-bold flex items-center justify-center text-xs">3</div>
+              <h3 className="font-serif font-bold text-lg text-amber-100">Acoustic Mastering & Vinyl Style</h3>
             </div>
 
-            {/* Primary complete vinyl recipe. The legacy voice filter remains
-                below as a compatible advanced coloration control. */}
             <VinylPresetSelector selected={vinylPresetId} onChange={setVinylPresetId} />
 
-            {/* 1. Voice coloration selector */}
-            <FilterSelector
-              selectedFilter={filterPreset}
-              onChange={setFilterPreset}
-              isPremium={isPremium}
-              onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
-              allowedPresets={currentPlan?.allowed_filter_presets}
-            />
+            <FilterSelector selectedFilter={filterPreset} onChange={setFilterPreset} isPremium={isPremium} onTriggerUpgrade={() => setIsUpgradeModalOpen(true)} allowedPresets={resolvedEntitlement?.enabledFeatures?.allowedFilterPresets || currentPlan?.allowed_filter_presets} />
 
-            {/* 2. Background Atmosphere Selector */}
-            <BackgroundMusicSelector
-              assets={audioAssets}
-              selectedBgMusicId={selectedBgMusicId}
-              onChange={(id) => {
-                setSelectedBgMusicId(id);
-                const asset = audioAssets.find((item) => item.id === id);
-                if (asset?.default_volume !== undefined) setBgMusicVolume(asset.default_volume);
-              }}
-              isPremium={isPremium}
-              onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
-              allowedAssetIds={currentPlan?.allowed_bg_music_ids}
-            />
+            <BackgroundMusicSelector assets={audioAssets} selectedBgMusicId={selectedBgMusicId} onChange={(id) => { setSelectedBgMusicId(id); const asset = audioAssets.find((item) => item.id === id); if (asset?.default_volume !== undefined) setBgMusicVolume(asset.default_volume); }} isPremium={isPremium} onTriggerUpgrade={() => setIsUpgradeModalOpen(true)} allowedAssetIds={resolvedEntitlement?.enabledFeatures?.allowedBgMusicIds || currentPlan?.allowed_bg_music_ids} />
 
-            {/* 3. Vinyl Surface Noise & Crackle Slider */}
-            <CrackleSlider
-              intensity={crackleIntensity}
-              onChange={setCrackleIntensity}
-              canAdjust={isPremium || currentPlan?.can_adjust_crackle}
-              onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
-            />
+            <CrackleSlider intensity={crackleIntensity} onChange={setCrackleIntensity} canAdjust={isPremium || resolvedEntitlement?.enabledFeatures?.canAdjustCrackle || currentPlan?.can_adjust_crackle} onTriggerUpgrade={() => setIsUpgradeModalOpen(true)} />
 
-            <AnalogMixerControls
-              assets={audioAssets}
-              bgMusicVolume={bgMusicVolume}
-              onBgMusicVolumeChange={setBgMusicVolume}
-              crackleAssetId={crackleAssetId}
-              onCrackleAssetChange={(id) => {
-                setCrackleAssetId(id);
-                const asset = audioAssets.find((item) => item.id === id);
-                if (asset?.default_volume !== undefined) setCrackleIntensity(asset.default_volume);
-              }}
-              hissIntensity={hissIntensity}
-              onHissChange={setHissIntensity}
-              rumbleIntensity={rumbleIntensity}
-              onRumbleChange={setRumbleIntensity}
-              soundEffectId={soundEffectId}
-              onSoundEffectChange={(id) => {
-                setSoundEffectId(id);
-                const asset = audioAssets.find((item) => item.id === id);
-                if (asset?.default_volume !== undefined) setSoundEffectVolume(asset.default_volume);
-              }}
-              soundEffectVolume={soundEffectVolume}
-              onSoundEffectVolumeChange={setSoundEffectVolume}
-              musicClarity={musicClarity}
-              onMusicClarityChange={setMusicClarity}
-              crackleBrightness={crackleBrightness}
-              onCrackleBrightnessChange={setCrackleBrightness}
-              voiceWarmth={voiceWarmth}
-              onVoiceWarmthChange={setVoiceWarmth}
-              voicePresence={voicePresence}
-              onVoicePresenceChange={setVoicePresence}
-              wowFlutter={wowFlutter}
-              onWowFlutterChange={setWowFlutter}
-              introDelay={introDelay}
-              onIntroDelayChange={setIntroDelay}
-              isPremium={isPremium}
-            />
+            <AnalogMixerControls assets={audioAssets} bgMusicVolume={bgMusicVolume} onBgMusicVolumeChange={setBgMusicVolume} crackleAssetId={crackleAssetId} onCrackleAssetChange={(id) => { setCrackleAssetId(id); const asset = audioAssets.find((item) => item.id === id); if (asset?.default_volume !== undefined) setCrackleIntensity(asset.default_volume); }} hissIntensity={hissIntensity} onHissChange={setHissIntensity} rumbleIntensity={rumbleIntensity} onRumbleChange={setRumbleIntensity} soundEffectId={soundEffectId} onSoundEffectChange={(id) => { setSoundEffectId(id); const asset = audioAssets.find((item) => item.id === id); if (asset?.default_volume !== undefined) setSoundEffectVolume(asset.default_volume); }} soundEffectVolume={soundEffectVolume} onSoundEffectVolumeChange={setSoundEffectVolume} musicClarity={musicClarity} onMusicClarityChange={setMusicClarity} crackleBrightness={crackleBrightness} onCrackleBrightnessChange={setCrackleBrightness} voiceWarmth={voiceWarmth} onVoiceWarmthChange={setVoiceWarmth} voicePresence={voicePresence} onVoicePresenceChange={setVoicePresence} wowFlutter={wowFlutter} onWowFlutterChange={setWowFlutter} introDelay={introDelay} onIntroDelayChange={setIntroDelay} isPremium={isPremium || resolvedEntitlement?.enabledFeatures?.canUseAdvancedMixer} />
 
-            {/* 4. Vinyl Disc Edition / Color */}
-            <VinylStyleSelector
-              selectedStyle={vinylStyle}
-              onChange={setVinylStyle}
-              isPremium={isPremium}
-              onTriggerUpgrade={() => setIsUpgradeModalOpen(true)}
-              allowedStyles={currentPlan?.allowed_vinyl_styles}
-            />
+            <VinylStyleSelector selectedStyle={vinylStyle} onChange={setVinylStyle} isPremium={isPremium} onTriggerUpgrade={() => setIsUpgradeModalOpen(true)} allowedStyles={resolvedEntitlement?.enabledFeatures?.allowedVinylStyles || currentPlan?.allowed_vinyl_styles} />
 
-            {/* Submit & Press Action */}
             <div className="pt-4 border-t border-stone-800 space-y-3">
               {isOverDurationLimit ? (
-                <Button
-                  variant="primary"
-                  size="lg"
-                  onClick={() => setIsUpgradeModalOpen(true)}
-                  className="w-full text-base"
-                  leftIcon={<Crown className="w-5 h-5 text-stone-950" />}
-                >
-                  Unlock Duration to Press Record
-                </Button>
+                <Button variant="primary" size="lg" onClick={() => setIsUpgradeModalOpen(true)} className="w-full text-base" leftIcon={<Crown className="w-5 h-5 text-stone-950" />}>Unlock Duration to Press Record</Button>
               ) : (
-                <Button
-                  variant="primary"
-                  size="lg"
-                  onClick={handleSubmitAndPressWax}
-                  disabled={!audioBlob || isSubmitting}
-                  isLoading={isSubmitting}
-                  className="w-full text-base"
-                  leftIcon={<Disc3 className="w-5 h-5 text-stone-950 animate-spin-slow" />}
-                  rightIcon={<Send className="w-4 h-4 ml-1" />}
-                >
-                  Press Digital Wax & Generate 3D Player
-                </Button>
+                <Button variant="primary" size="lg" onClick={handleSubmitAndPressWax} disabled={!audioBlob || isSubmitting} isLoading={isSubmitting} className="w-full text-base" leftIcon={<Disc3 className="w-5 h-5 text-stone-950 animate-spin-slow" />} rightIcon={<Send className="w-4 h-4 ml-1" />}>Press Digital Wax & Generate 3D Player</Button>
               )}
-
-              <p className="text-center text-[11px] text-stone-500 font-mono">
-                Synthesized in loss-free 192kbps MP3 with Whisper AI word timestamps.
-              </p>
+              <p className="text-center text-[11px] text-stone-500 font-mono">Entitlement verified server-side • {canDownload ? 'download allowed' : 'download locked on free'} • Synthesized in 192kbps MP3</p>
+              {pendingPerRecordingPlan && (
+                <div className="rounded-xl border border-amber-700/30 bg-amber-950/20 p-3 text-xs text-amber-200">
+                  <p>Premium features requested. Unlock this record only for ${(pendingPerRecordingPlan.price_cents / 100).toFixed(2)}?</p>
+                  <div className="flex gap-2 mt-2">
+                    <Button size="sm" onClick={() => handlePerRecordingCheckout(pendingPerRecordingPlan, null)}>Unlock this record ${pendingPerRecordingPlan.price_cents / 100}</Button>
+                    <Button size="sm" variant="outline" onClick={() => setIsUpgradeModalOpen(true)}>See all plans</Button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Lathe Animated Processing Modal */}
-      <LatheProcessingModal
-        isOpen={isProcessingModalOpen}
-        onClose={() => setIsProcessingModalOpen(false)}
-        statusIndex={latheStepIndex}
-      />
+      <LatheProcessingModal isOpen={isProcessingModalOpen} onClose={() => setIsProcessingModalOpen(false)} statusIndex={latheStepIndex} />
 
-      {/* Stripe Pricing Upgrade Modal */}
       <StripeUpgradeModal
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
         plans={pricingPlans}
         onSuccessUpgrade={(planId) => {
-          setActivePlanId(planId);
-          window.localStorage.setItem('vynyl_active_plan_id', planId);
+          // No localStorage trust - just reload entitlement
+          loadEntitlement();
+          toast.success('Plan selected - entitlement will be verified server-side after payment');
         }}
       />
     </main>
@@ -633,13 +570,7 @@ export default function StudioPage() {
   return (
     <div className="min-h-screen bg-[#0c0a09] text-stone-100 flex flex-col selection:bg-amber-600 selection:text-white">
       <Navbar />
-      <Suspense
-        fallback={
-          <div className="flex-1 flex items-center justify-center min-h-[400px]">
-            <Disc3 className="w-10 h-10 text-amber-500 animate-spin" />
-          </div>
-        }
-      >
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center min-h-[400px]"><Disc3 className="w-10 h-10 text-amber-500 animate-spin" /></div>}>
         <StudioContent />
       </Suspense>
       <Footer />

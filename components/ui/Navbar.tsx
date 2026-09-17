@@ -1,15 +1,41 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { Disc3, Mic, Sparkles, Menu, X, Music } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Disc3, Mic, Sparkles, Menu, X, Music, LogOut, Library, User, LogIn } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Button } from './Button';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) { setLoadingUser(false); return; }
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user ? { id: data.user.id, email: data.user.email } : null);
+      setLoadingUser(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_, session) => {
+      setUser(session?.user ? { id: session.user.id, email: session.user.email } : null);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  async function handleSignOut() {
+    const supabase = createSupabaseBrowserClient();
+    if (supabase) await supabase.auth.signOut();
+    await fetch('/api/auth/customer', { method: 'DELETE' }).catch(() => {});
+    setUser(null);
+    router.push('/');
+    router.refresh();
+  }
 
   const navLinks = [
     { href: '/studio', label: 'Sender Studio', icon: <Mic className="w-4 h-4 text-amber-500" /> },
@@ -62,24 +88,52 @@ export const Navbar: React.FC = () => {
         </nav>
 
         {/* Header Right Actions */}
-        <div className="hidden sm:flex items-center gap-3">
-          <Link href="/studio">
-            <Button
-              variant="primary"
-              size="md"
-              leftIcon={<Mic className="w-4 h-4" />}
-            >
-              Record Wax Note
-            </Button>
-          </Link>
+        <div className="hidden sm:flex items-center gap-2">
+          {loadingUser ? (
+            <div className="h-8 w-24 animate-pulse rounded-xl bg-stone-800" />
+          ) : user ? (
+            <>
+              <Link href="/library">
+                <Button variant="outline" size="sm" leftIcon={<Library className="w-4 h-4" />}>Library</Button>
+              </Link>
+              <Link href="/account">
+                <Button variant="outline" size="sm" leftIcon={<User className="w-4 h-4" />}>Account</Button>
+              </Link>
+              <button onClick={handleSignOut} className="p-2 rounded-xl bg-stone-900 text-stone-400 hover:text-red-300" title="Sign out">
+                <LogOut className="w-4 h-4" />
+              </button>
+              <Link href="/studio">
+                <Button variant="primary" size="md" leftIcon={<Mic className="w-4 h-4" />}>Record</Button>
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link href="/login">
+                <Button variant="outline" size="sm" leftIcon={<LogIn className="w-4 h-4" />}>Sign in</Button>
+              </Link>
+              <Link href="/signup">
+                <Button variant="primary" size="sm">Create account</Button>
+              </Link>
+              <Link href="/studio">
+                <Button variant="primary" size="md" leftIcon={<Mic className="w-4 h-4" />}>Record Wax Note</Button>
+              </Link>
+            </>
+          )}
         </div>
 
         {/* Mobile Hamburger Button */}
         <div className="flex md:hidden items-center gap-2">
+          {user ? (
+            <Link href="/library">
+              <Button variant="outline" size="sm">Library</Button>
+            </Link>
+          ) : (
+            <Link href="/login">
+              <Button variant="outline" size="sm">Sign in</Button>
+            </Link>
+          )}
           <Link href="/studio">
-            <Button variant="primary" size="sm" leftIcon={<Mic className="w-3.5 h-3.5" />}>
-              Record
-            </Button>
+            <Button variant="primary" size="sm" leftIcon={<Mic className="w-3.5 h-3.5" />}>Record</Button>
           </Link>
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -105,6 +159,30 @@ export const Navbar: React.FC = () => {
               <span>{link.label}</span>
             </Link>
           ))}
+          <div className="pt-2 border-t border-stone-800 space-y-2">
+            {user ? (
+              <>
+                <Link href="/library" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-stone-200 hover:bg-stone-900">
+                  <Library className="w-4 h-4" /> Library
+                </Link>
+                <Link href="/account" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-stone-200 hover:bg-stone-900">
+                  <User className="w-4 h-4" /> Account
+                </Link>
+                <button onClick={() => { setMobileMenuOpen(false); handleSignOut(); }} className="flex w-full items-center gap-3 px-4 py-3 rounded-xl text-sm text-stone-400 hover:bg-stone-900 hover:text-red-300">
+                  <LogOut className="w-4 h-4" /> Sign out
+                </button>
+              </>
+            ) : (
+              <>
+                <Link href="/login" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-stone-200 hover:bg-stone-900">
+                  <LogIn className="w-4 h-4" /> Sign in
+                </Link>
+                <Link href="/signup" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-stone-200 hover:bg-stone-900">
+                  <User className="w-4 h-4" /> Create account
+                </Link>
+              </>
+            )}
+          </div>
         </div>
       )}
     </header>
