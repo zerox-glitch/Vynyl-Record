@@ -1,12 +1,6 @@
-import { createServerClient } from '@supabase/ssr';
+import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
-/**
- * Customer auth server helper. Admin auth remains separate in lib/admin-auth.
- * This is deliberately tiny so customer sessions are standard Supabase
- * cookies and can be replaced by middleware refresh later without touching
- * record ownership code.
- */
 export function getCustomerServerClient() {
   const cookieStore = cookies();
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -16,10 +10,10 @@ export function getCustomerServerClient() {
   return createServerClient(url, key, {
     cookies: {
       get(name: string) { return cookieStore.get(name)?.value; },
-      set(name: string, value: string, options: any) {
+      set(name: string, value: string, options: CookieOptions) {
         try { cookieStore.set({ name, value, ...options }); } catch {}
       },
-      remove(name: string, options: any) {
+      remove(name: string, options: CookieOptions) {
         try { cookieStore.set({ name, value: '', ...options }); } catch {}
       },
     },
@@ -31,4 +25,39 @@ export async function getCustomerUser(): Promise<{ id: string; email?: string } 
   if (!client) return null;
   const { data } = await client.auth.getUser();
   return data.user ? { id: data.user.id, email: data.user.email } : null;
+}
+
+export async function getCustomerUserWithDetails() {
+  const client = getCustomerServerClient();
+  if (!client) return null;
+  const { data } = await client.auth.getUser();
+  if (!data.user) return null;
+  return data.user;
+}
+
+// Safe redirect validation to prevent open-redirect
+export function getSafeNextUrl(nextParam: string | null, origin: string): string {
+  if (!nextParam) return '/library';
+  try {
+    // Only allow relative paths starting with /
+    if (!nextParam.startsWith('/')) return '/library';
+    // Disallow protocol-relative and double-slash
+    if (nextParam.startsWith('//')) return '/library';
+    // Disallow paths that attempt to escape
+    const url = new URL(nextParam, origin);
+    // Ensure same origin
+    if (url.origin !== origin) return '/library';
+    // Allow only specific safe prefixes
+    const allowedPrefixes = ['/', '/library', '/studio', '/account', '/play'];
+    // All relative paths starting with / are allowed if they don't contain suspicious patterns
+    if (nextParam.includes('..')) return '/library';
+    return nextParam;
+  } catch {
+    return '/library';
+  }
+}
+
+export function getAuthCallbackRedirectUrl(requestOrigin: string, next?: string | null) {
+  const safeNext = getSafeNextUrl(next || null, requestOrigin);
+  return `${requestOrigin}/auth/callback?next=${encodeURIComponent(safeNext)}`;
 }
