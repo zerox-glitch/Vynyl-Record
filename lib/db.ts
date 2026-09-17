@@ -253,22 +253,25 @@ export async function getPricingPlans(): Promise<PricingPlan[]> {
         .from('pricing_plans')
         .select('*')
         .eq('is_active', true)
-        .order('price_cents', { ascending: true });
+        .order('display_order', { ascending: true });
       if (data && data.length > 0) return data as PricingPlan[];
+      // fallback order by price
+      const { data: data2 } = await supabase.from('pricing_plans').select('*').eq('is_active', true).order('price_cents', { ascending: true });
+      if (data2 && data2.length > 0) return data2 as PricingPlan[];
     } catch (err) {
       console.warn('Supabase pricing_plans fallback:', err);
     }
   }
 
   const store = readLocalStore();
-  return store.pricingPlans.filter((p) => p.is_active);
+  return store.pricingPlans.filter((p) => p.is_active).sort((a,b) => (a.display_order||0)-(b.display_order||0));
 }
 
 export async function getAllPricingPlans(): Promise<PricingPlan[]> {
   if (isSupabaseServerConfigured()) {
     try {
       const supabase = getServiceSupabase();
-      const { data, error } = await supabase.from('pricing_plans').select('*').order('price_cents', { ascending: true });
+      const { data, error } = await supabase.from('pricing_plans').select('*').order('display_order', { ascending: true });
       if (error) throw error;
       if (data) return data as PricingPlan[];
     } catch (err) {
@@ -276,13 +279,41 @@ export async function getAllPricingPlans(): Promise<PricingPlan[]> {
     }
   }
   const store = readLocalStore();
-  return store.pricingPlans;
+  return store.pricingPlans.sort((a,b) => (a.display_order||0)-(b.display_order||0));
 }
 
 export async function upsertPricingPlan(plan: PricingPlan): Promise<PricingPlan> {
+  // sanitize
+  const sanitized: PricingPlan = {
+    id: plan.id,
+    slug: (plan.slug || plan.name.toLowerCase().replace(/[^a-z0-9]+/g,'-')).slice(0,80),
+    name: String(plan.name).slice(0,120),
+    description: plan.description ? String(plan.description).slice(0,500) : null,
+    billing_model: (['free','per_recording','monthly','lifetime'].includes(plan.billing_model) ? plan.billing_model : 'free') as any,
+    price_cents: Math.max(0, Math.min(1000000, Math.floor(plan.price_cents))),
+    currency: (plan.currency || 'usd').toLowerCase().slice(0,10),
+    billing_interval: plan.billing_interval || (plan.billing_model === 'monthly' ? 'month' : plan.billing_model === 'free' ? null : 'one_time') as any,
+    stripe_product_id: plan.stripe_product_id || null,
+    stripe_price_id: plan.stripe_price_id || null,
+    max_duration_seconds: Math.max(10, Math.min(3600, Math.floor(plan.max_duration_seconds))),
+    included_recordings: plan.included_recordings != null ? Math.max(0, Math.floor(plan.included_recordings)) : null,
+    allowed_filter_presets: Array.isArray(plan.allowed_filter_presets) ? plan.allowed_filter_presets : ['clean','gramophone'],
+    allowed_vinyl_presets: Array.isArray(plan.allowed_vinyl_presets) ? plan.allowed_vinyl_presets : ['all'],
+    allowed_bg_music_ids: Array.isArray(plan.allowed_bg_music_ids) ? plan.allowed_bg_music_ids : ['none'],
+    allowed_vinyl_styles: Array.isArray(plan.allowed_vinyl_styles) ? plan.allowed_vinyl_styles : ['classic_red'],
+    can_adjust_crackle: !!plan.can_adjust_crackle,
+    can_download: plan.can_download ?? true,
+    can_use_private_visibility: plan.can_use_private_visibility ?? false,
+    can_use_advanced_mixer: plan.can_use_advanced_mixer ?? false,
+    is_active: !!plan.is_active,
+    display_order: plan.display_order != null ? Math.floor(plan.display_order) : 0,
+    created_at: plan.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
   if (isSupabaseServerConfigured()) {
     const supabase = getServiceSupabase();
-    const { data, error } = await supabase.from('pricing_plans').upsert(plan).select().single();
+    const { data, error } = await supabase.from('pricing_plans').upsert(sanitized).select().single();
     if (error) throw new Error(`Pricing plan could not be saved: ${error.message}`);
     return data as PricingPlan;
   }
@@ -290,13 +321,31 @@ export async function upsertPricingPlan(plan: PricingPlan): Promise<PricingPlan>
   const store = readLocalStore();
   const idx = store.pricingPlans.findIndex((p) => p.id === plan.id);
   if (idx >= 0) {
-    store.pricingPlans[idx] = plan;
+    store.pricingPlans[idx] = sanitized;
   } else {
-    store.pricingPlans.push(plan);
+    store.pricingPlans.push(sanitized);
   }
   writeLocalStore(store);
-  return plan;
+  return sanitized;
 }
+
+export async function deletePricingPlan(id: string): Promise<void> {
+  if (isSupabaseServerConfigured()) {
+    const supabase = getServiceSupabase();
+    // Prevent deletion if referenced
+    const { data: userEnts } = await supabase.from('user_entitlements').select('id').eq('plan_id', id).limit(1);
+    if (userEnts && userEnts.length > 0) throw new Error('Cannot delete plan currently referenced by entitlements. Archive it instead.');
+    const { data: recEnts } = await supabase.from('recording_entitlements').select('id').eq('plan_id', id).limit(1);
+    if (recEnts && recEnts.length > 0) throw new Error('Cannot delete plan currently referenced by recording purchases. Archive it instead.');
+    const { error } = await supabase.from('pricing_plans').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+  const store = readLocalStore();
+  store.pricingPlans = store.pricingPlans.filter(p => p.id !== id);
+  writeLocalStore(store);
+}
+
 
 // 3. AUDIO ASSETS
 export async function getAudioAssets(): Promise<AudioAsset[]> {
@@ -741,3 +790,44 @@ export async function updateIntegrationSettings(settings: Partial<IntegrationSet
   writeLocalStore(store);
   return store.integrationSettings;
 }
+
+// 7. ADMIN AUDIT LOGS
+export async function createAuditLog(input: {
+  action: string;
+  target_user_id?: string | null;
+  target_plan_id?: string | null;
+  target_recording_id?: string | null;
+  before_data?: any;
+  after_data?: any;
+  metadata?: any;
+  admin_session_id?: string | null;
+  admin_user_id?: string | null;
+}) {
+  if (!isSupabaseServerConfigured()) {
+    patchLocalStore('adminAuditLogs', (logs: any[] = []) => [...logs, { ...input, id: crypto.randomUUID(), created_at: new Date().toISOString() }]);
+    return;
+  }
+  const supabase = getServiceSupabase();
+  await supabase.from('admin_audit_logs').insert({
+    action: input.action,
+    target_user_id: input.target_user_id || null,
+    target_plan_id: input.target_plan_id || null,
+    target_recording_id: input.target_recording_id || null,
+    before_data: input.before_data || null,
+    after_data: input.after_data || null,
+    metadata: input.metadata || {},
+    admin_session_id: input.admin_session_id || null,
+    admin_user_id: input.admin_user_id || null,
+  });
+}
+
+export async function getAuditLogs(limit = 100) {
+  if (!isSupabaseServerConfigured()) {
+    const store = readLocalStore() as any;
+    return (store.adminAuditLogs || []).slice(0, limit);
+  }
+  const supabase = getServiceSupabase();
+  const { data } = await supabase.from('admin_audit_logs').select('*').order('created_at', { ascending: false }).limit(limit);
+  return data || [];
+}
+
