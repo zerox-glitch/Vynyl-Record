@@ -35,12 +35,41 @@ Apply in numeric order or run consolidated `SUPABASE_SETUP.sql` (idempotent):
 ### Verification queries
 
 ```sql
+-- Core tables exist
 select table_name from information_schema.tables where table_schema='public' and table_name in ('profiles','pricing_plans','user_entitlements','recording_entitlements','admin_audit_logs','stripe_webhook_events','recordings');
 
+-- RLS policies
 select policyname, cmd from pg_policies where tablename in ('profiles','user_entitlements','recording_entitlements') order by tablename, cmd;
 
+-- Pricing plans seeded
 select slug, billing_model, price_cents, is_active, display_order from pricing_plans order by display_order;
+
+-- CRITICAL: Verify profile trigger and free entitlement trigger exist (fixes Google OAuth "profile not created")
+select tgname, tgenabled, pg_get_triggerdef(oid) from pg_trigger where tgname in ('on_auth_user_created','on_profile_created_grant_free');
+select trigger_name, event_object_table, action_statement from information_schema.triggers where trigger_name in ('on_auth_user_created','on_profile_created_grant_free');
+
+-- Check handle_new_user function exists
+select proname, prosrc from pg_proc where proname in ('handle_new_user','grant_free_entitlement_on_profile');
+
+-- Verify a recent Google user has profile + free entitlement (replace with actual user id)
+-- select * from auth.users order by created_at desc limit 5;
+-- select * from public.profiles where id = 'USER_ID';
+-- select * from public.user_entitlements where user_id = 'USER_ID';
+
+-- If triggers are missing, re-apply SUPABASE_SETUP.sql or supabase/migrations/00010_profiles_entitlements_pricing.sql
+-- in Supabase Dashboard → SQL Editor. The script is idempotent.
 ```
+
+#### Google OAuth profile not created — diagnosis & fix
+
+If after Google sign-in the user appears as not signed in (Navbar shows "Sign in" instead of "Library / Account") and `public.profiles` has no row:
+
+1. Check env vars in Vercel: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL` must be set and deployment redeployed after setting them.
+2. In Supabase Dashboard → SQL Editor run the verification queries above. If `on_auth_user_created` trigger is missing, the 00010 migration was not applied. **Fix:** run `SUPABASE_SETUP.sql` (entire file) or at least `supabase/migrations/00010_profiles_entitlements_pricing.sql` — it is safe to re-run.
+3. The app's `app/auth/callback/page.tsx` now has a **fallback** that creates the profile and free entitlement via service role if the trigger is missing, so even without the trigger the user will be signed in. However the trigger is still recommended for correctness.
+4. Check Supabase Auth → URL Configuration: Site URL must be `https://YOUR_VERCEL_PROD_DOMAIN`, and Redirect URLs must include `https://YOUR_VERCEL_PROD_DOMAIN/auth/callback` (plus `/login`, `/library`, `/account`, `/studio`). For local dev add `http://localhost:3000/auth/callback`.
+5. Check Google Cloud Console → Authorized redirect URIs must be `https://YOUR_PROJECT.supabase.co/auth/v1/callback` (Supabase's callback, NOT your app's). This fixes `400 redirect_uri_mismatch`.
+6. After fixing, test: sign in with Google → should redirect to `/library`, Navbar shows Library/Account/Sign out, `/account` shows email/provider=google/verified/plan=Free, and `select * from public.profiles where email = 'your@gmail.com'` returns a row.
 
 ## 2. Supabase Email Auth
 
