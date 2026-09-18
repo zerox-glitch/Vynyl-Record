@@ -29,12 +29,17 @@ export function getClientIp(req: Request | { headers: any; ip?: string }): strin
   return 'unknown';
 }
 
-// Cleanup old entries every 5 minutes
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now();
-    store.forEach((v, k) => {
-      if (now > v.resetAt) store.delete(k);
-    });
-  }, 5 * 60 * 1000);
+// Cleanup old entries every 5 minutes - only in Node runtime, not edge
+// Use unref to prevent keeping serverless function alive
+if (typeof setInterval !== 'undefined' && typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+  try {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      store.forEach((v, k) => {
+        if (now > v.resetAt) store.delete(k);
+      });
+    }, 5 * 60 * 1000);
+    // @ts-ignore - unref exists in Node
+    if (interval && typeof interval.unref === 'function') interval.unref();
+  } catch {}
 }

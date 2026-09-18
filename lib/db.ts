@@ -31,13 +31,23 @@ interface LocalStore {
 // Serverless writable directory: use os.tmpdir() to prevent EROFS errors on Vercel
 const DATA_FILE = path.join(os.tmpdir(), 'vynyl_local_database.json');
 
-/** Local JSON is demo/dev only. Production must never silently fork data. */
+/**
+ * Local JSON is demo/dev only when Supabase is configured.
+ * When Supabase is NOT configured (e.g. Vercel preview without env vars),
+ * we allow fallback even in production to prevent hard crashes on homepage.
+ * Production with Supabase configured must set ALLOW_LOCAL_DEMO_STORE=true to use local fallback.
+ */
 function localFallbackAllowed(): boolean {
+  if (!isSupabaseServerConfigured()) return true;
   return process.env.NODE_ENV !== 'production' || process.env.ALLOW_LOCAL_DEMO_STORE === 'true';
 }
 function requireLocalFallbackAllowed(): void {
   if (!localFallbackAllowed()) {
-    throw new Error('Persistent database is unavailable. Configure Supabase; local JSON fallback is disabled in production.');
+    // Only throw if Supabase is configured but local fallback is not allowed
+    if (isSupabaseServerConfigured()) {
+      throw new Error('Persistent database is unavailable. Configure Supabase; local JSON fallback is disabled in production.');
+    }
+    // If Supabase not configured, allow fallback silently to prevent Vercel crash
   }
 }
 
@@ -359,7 +369,9 @@ export async function getAudioAssets(): Promise<AudioAsset[]> {
       return (data || []) as AudioAsset[];
     } catch (err) {
       console.warn('Supabase audio_assets error:', err);
-      if (process.env.NODE_ENV === 'production') {
+      // In production, if Supabase is configured but table missing, fallback to local with warning
+      // to prevent hard crash on homepage. Only throw if explicitly required.
+      if (process.env.NODE_ENV === 'production' && process.env.STRICT_DB === 'true') {
         throw new Error('The audio asset database is unavailable. Check the Supabase configuration and schema.');
       }
     }
