@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { enqueueJob } from '@/lib/processing/queue';
 import { saveRecording } from '@/lib/db';
 import { getCustomerUser } from '@/lib/supabase/auth';
-import { FilterPresetType, OccasionType, Recording, VinylStyleType } from '@/types';
+import { FilterPresetType, OccasionType, Recording, VinylStyleType, RecordingVisibility } from '@/types';
+import { resolveUserEntitlement } from '@/lib/entitlements';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,9 +28,7 @@ function safeId(value: unknown): string | null {
 
 /**
  * Queue a recording after the browser has uploaded its original directly to
- * R2 (or to the signed local fallback). No audio bytes enter this request and
- * no FFmpeg runs here. The response is intentionally fast: the UI polls the
- * status endpoint and routes to the finished record only after completion.
+ * R2 (or to the signed local fallback). Entitlement is resolved server-side.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -56,13 +55,50 @@ export async function POST(req: NextRequest) {
     const recipientName = safeText(body?.recipientName, 120);
     const senderName = safeText(body?.senderName, 120);
     const occasion = safeText(body?.occasion, 40) as OccasionType;
-    const filterPreset = (safeText(body?.filterPreset, 30) || 'gramophone') as FilterPresetType;
+    let filterPreset = (safeText(body?.filterPreset, 30) || 'gramophone') as FilterPresetType;
     const vinylPresetId = safeText(body?.vinylPresetId, 40) || null;
-    const vinylStyle = (safeText(body?.vinylStyle, 40) || 'classic_red') as VinylStyleType;
+    let vinylStyle = (safeText(body?.vinylStyle, 40) || 'classic_red') as VinylStyleType;
     const crackleIntensity = safeNumber(body?.crackleIntensity, 0.22, 0, 1);
     const bgMusicVolume = safeNumber(body?.bgMusicVolume, 0.18, 0, 0.8);
-    const maxSeconds = Math.round(safeNumber(body?.maxSeconds, 600, 5, 1800));
-    const durationSeconds = safeNumber(body?.durationSeconds, 0, 0, maxSeconds);
+    const maxSecondsInput = Math.round(safeNumber(body?.maxSeconds, 600, 5, 1800));
+    const durationSeconds = safeNumber(body?.durationSeconds, 0, 0, maxSecondsInput);
+    let bgMusicId = safeText(body?.bgMusicId, 120) || null;
+    let visibility = (safeText(body?.visibility, 20) || 'unlisted') as RecordingVisibility;
+
+    // Resolve entitlement server-side
+    const entitlement = await resolveUserEntitlement(customer?.id || 'anonymous');
+    const effectivePlan = entitlement.effectivePlan;
+    const allowedFilters = entitlement.enabledFeatures.allowedFilterPresets;
+    const allowedStyles = entitlement.enabledFeatures.allowedVinylStyles;
+    const allowedBg = entitlement.enabledFeatures.allowedBgMusicIds;
+    const canUsePrivate = entitlement.enabledFeatures.canUsePrivateVisibility;
+    const maxDuration = entitlement.durationLimit;
+
+    // Enforce duration limit
+    if (durationSeconds > maxDuration) {
+      return NextResponse.json({ error: `Recording exceeds duration limit of ${Math.floor(maxDuration/60)} minutes for your plan ${effectivePlan?.name}. Upgrade required.` }, { status: 403 });
+    }
+
+    // Enforce filter preset
+    if (!allowedFilters.includes(filterPreset)) {
+      // Downgrade to allowed default instead of failing, but note
+      filterPreset = (allowedFilters[0] || 'gramophone') as FilterPresetType;
+    }
+
+    // Enforce vinyl style
+    if (!allowedStyles.includes(vinylStyle)) {
+      vinylStyle = (allowedStyles[0] || 'classic_red') as VinylStyleType;
+    }
+
+    // Enforce bg music
+    if (bgMusicId && bgMusicId !== 'none' && !allowedBg.includes('all') && !allowedBg.includes(bgMusicId)) {
+      bgMusicId = 'none';
+    }
+
+    // Enforce private visibility
+    if (visibility === 'private' && !canUsePrivate) {
+      visibility = 'unlisted';
+    }
 
     const recording: Recording = {
       id: recordId,
@@ -77,11 +113,11 @@ export async function POST(req: NextRequest) {
       vinyl_style: vinylStyle,
       filter_preset: filterPreset,
       crackle_intensity: crackleIntensity,
-      bg_music_id: safeText(body?.bgMusicId, 120) || null,
+      bg_music_id: bgMusicId,
       views: 0,
       created_at: new Date().toISOString(),
       duration_seconds: durationSeconds || undefined,
-      visibility: 'unlisted',
+      visibility,
       occasion: occasion || null,
       dedication: safeText(body?.dedication, 1000) || null,
       side_a_label: safeText(body?.sideALabel, 80) || null,
@@ -90,6 +126,8 @@ export async function POST(req: NextRequest) {
       processing_state: 'queued',
       processing_progress: 0,
       processing_error: null,
+      entitlement_plan_id: effectivePlan?.id || null,
+      entitlement_source: entitlement.source as any,
     };
 
     await saveRecording(recording);
@@ -105,10 +143,12 @@ export async function POST(req: NextRequest) {
         filterPreset,
         vinylPresetId,
         crackleIntensity,
-        bgMusicId: safeText(body?.bgMusicId, 120) || null,
+        bgMusicId,
         bgMusicVolume,
         vinylStyle,
-        maxSeconds,
+        maxSeconds: maxDuration + 5,
+        entitlementPlanId: effectivePlan?.id,
+        entitlementSource: entitlement.source,
       },
     });
 
@@ -118,6 +158,13 @@ export async function POST(req: NextRequest) {
       slug: recording.slug,
       recording,
       jobId: job.id,
+      entitlement: {
+        plan: effectivePlan?.name,
+        billingModel: entitlement.billingModel,
+        isPremium: entitlement.isPremium,
+        durationLimit: maxDuration,
+        reason: entitlement.reason,
+      },
       statusUrl: `/api/processing/status/${encodeURIComponent(recording.id)}`,
     }, { status: 202 });
   } catch (error: any) {

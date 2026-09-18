@@ -6,6 +6,7 @@ import { AdminPricingTab } from '@/components/admin/AdminPricingTab';
 import { AdminAudioStudioTab } from '@/components/admin/AdminAudioStudioTab';
 import { AdminUsersTab } from '@/components/admin/AdminUsersTab';
 import { AdminRecordingsTab } from '@/components/admin/AdminRecordingsTab';
+import { AdminAuditTab } from '@/components/admin/AdminAuditTab';
 import { 
   SiteSettings, 
   PricingPlan, 
@@ -30,7 +31,7 @@ import {
   LogOut
 } from 'lucide-react';
 
-type AdminTab = 'cms' | 'pricing' | 'audio' | 'users' | 'recordings';
+type AdminTab = 'cms' | 'pricing' | 'audio' | 'users' | 'recordings' | 'audit';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>('cms');
@@ -39,7 +40,7 @@ export default function AdminPage() {
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
   const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>(DEFAULT_PRICING_PLANS);
   const [audioAssets, setAudioAssets] = useState<AudioAsset[]>(DEFAULT_AUDIO_ASSETS);
-  const [users, setUsers] = useState<Profile[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>(DEMO_RECORDINGS);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -60,7 +61,7 @@ export default function AdminPage() {
           fetch('/api/cms'),
           fetch('/api/pricing'),
           fetch('/api/audio/upload-asset'),
-          fetch('/api/admin/users'),
+          fetch('/api/admin/users?limit=100'),
           fetch('/api/recordings'),
         ]);
         if (responses.some((response) => response.status === 401)) {
@@ -98,13 +99,43 @@ export default function AdminPage() {
     setSiteSettings(updated);
   };
 
+  const loadUsers = async () => {
+    const res = await fetch('/api/admin/users?limit=100');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.users) setUsers(data.users as any);
+    }
+  };
+
+  const handleUpdateUser = async (id: string, updates: any) => {
+    const res = await fetch('/api/admin/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, updates }),
+    });
+    if (!res.ok) throw new Error('Failed to update user');
+    await loadUsers();
+  };
+
+  const handleDeleteUser = async (id: string, confirm: string = 'DELETE') => {
+    const res = await fetch(`/api/admin/users?id=${id}&confirm=${encodeURIComponent(confirm)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || 'Failed to delete user');
+    }
+    setUsers((prev) => prev.filter((u) => u.id !== id));
+  };
+
   const handleSavePlan = async (plan: PricingPlan) => {
     const res = await fetch('/api/pricing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(plan),
     });
-    if (!res.ok) throw new Error('Failed to save plan');
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || 'Failed to save plan');
+    }
     const data = await res.json();
     setPricingPlans((prev) => {
       const idx = prev.findIndex((p) => p.id === plan.id);
@@ -129,23 +160,6 @@ export default function AdminPage() {
     setAudioAssets((prev) => prev.map((item) => (item.id === asset.id ? asset : item)));
   };
 
-  const handleUpdateUser = async (id: string, updates: Partial<Profile>) => {
-    const res = await fetch('/api/admin/users', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, updates }),
-    });
-    if (!res.ok) throw new Error('Failed to update user');
-    const data = await res.json();
-    setUsers((prev) => prev.map((u) => (u.id === id ? data.user : u)));
-  };
-
-  const handleDeleteUser = async (id: string) => {
-    const res = await fetch(`/api/admin/users?id=${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete user');
-    setUsers((prev) => prev.filter((u) => u.id !== id));
-  };
-
   const handleDeleteRecording = async (id: string) => {
     const res = await fetch(`/api/recordings?id=${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to delete recording');
@@ -158,6 +172,7 @@ export default function AdminPage() {
     { id: 'audio', label: 'Audio Assets & Mic Studio', icon: <Volume2 className="w-4 h-4" /> },
     { id: 'users', label: 'User Management', icon: <Users className="w-4 h-4" /> },
     { id: 'recordings', label: 'Recordings Moderation', icon: <Disc3 className="w-4 h-4" /> },
+    { id: 'audit', label: 'Audit Log', icon: <Shield className="w-4 h-4" /> },
   ];
 
   return (
@@ -230,7 +245,13 @@ export default function AdminPage() {
           )}
 
           {!isLoading && !loadError && activeTab === 'pricing' && (
-            <AdminPricingTab plans={pricingPlans} audioAssets={audioAssets} onSavePlan={handleSavePlan} />
+            <AdminPricingTab plans={pricingPlans} audioAssets={audioAssets} onSavePlan={handleSavePlan} onRefresh={async () => {
+              const res = await fetch('/api/pricing');
+              if (res.ok) {
+                const d = await res.json();
+                if (d.plans) setPricingPlans(d.plans);
+              }
+            }} />
           )}
 
           {!isLoading && !loadError && activeTab === 'audio' && (
@@ -244,9 +265,10 @@ export default function AdminPage() {
 
           {!isLoading && !loadError && activeTab === 'users' && (
             <AdminUsersTab
-              users={users}
+              users={users as any}
               onUpdateUser={handleUpdateUser}
-              onDeleteUser={handleDeleteUser}
+              onDeleteUser={handleDeleteUser as any}
+              onRefresh={loadUsers}
             />
           )}
 
@@ -255,6 +277,10 @@ export default function AdminPage() {
               recordings={recordings}
               onDeleteRecording={handleDeleteRecording}
             />
+          )}
+
+          {!isLoading && !loadError && activeTab === 'audit' && (
+            <AdminAuditTab />
           )}
         </div>
       </main>

@@ -1,12 +1,15 @@
 export type UserRole = 'user' | 'admin';
+export type AccountStatus = 'active' | 'suspended' | 'disabled';
 
 export interface Profile {
   id: string;
   email: string;
   full_name: string | null;
+  avatar_url?: string | null;
   role: UserRole;
+  account_status?: AccountStatus;
   stripe_customer_id: string | null;
-  is_premium?: boolean;
+  is_premium?: boolean; // backward compat, not authoritative
   recording_count?: number;
   created_at: string;
   updated_at: string;
@@ -40,18 +43,34 @@ export type VinylStyleType =
   | 'vintage_emerald' 
   | 'smoked_obsidian';
 
+export type BillingModel = 'free' | 'per_recording' | 'monthly' | 'lifetime';
+export type BillingInterval = 'month' | 'year' | 'one_time' | null;
+
 export interface PricingPlan {
   id: string;
+  slug: string;
   name: string;
+  description?: string | null;
+  billing_model: BillingModel;
   price_cents: number;
+  currency: string;
+  billing_interval?: BillingInterval;
+  stripe_product_id?: string | null;
   stripe_price_id: string | null;
   max_duration_seconds: number;
+  included_recordings?: number | null;
   allowed_filter_presets: FilterPresetType[];
+  allowed_vinyl_presets?: string[]; // ['all'] or list
   allowed_bg_music_ids: string[];
   allowed_vinyl_styles: VinylStyleType[];
   can_adjust_crackle: boolean;
+  can_download?: boolean;
+  can_use_private_visibility?: boolean;
+  can_use_advanced_mixer?: boolean;
   is_active: boolean;
+  display_order?: number;
   created_at: string;
+  updated_at?: string;
 }
 
 export type AudioCategory = 'bg_music' | 'crackle' | 'sound_effect';
@@ -162,6 +181,9 @@ export interface Recording {
   cover_storage_key?: string | null;
   // Occasion association
   occasion?: OccasionType | null;
+  // Entitlement tracking for reprocessing
+  entitlement_plan_id?: string | null;
+  entitlement_source?: string | null;
 }
 
 export interface ProcessingJob {
@@ -241,4 +263,89 @@ export interface FilterPresetConfig {
   description: string;
   badge: string;
   isPremium?: boolean;
+}
+
+// =========================================================
+// New entitlement model
+// =========================================================
+export type EntitlementStatus = 'active' | 'trialing' | 'past_due' | 'canceled' | 'expired' | 'revoked';
+export type EntitlementSource = 'signup' | 'stripe' | 'admin' | 'lifetime' | 'migration';
+export type RecordingEntitlementStatus = 'active' | 'expired' | 'revoked' | 'refunded';
+
+export interface UserEntitlement {
+  id: string;
+  user_id: string;
+  plan_id: string;
+  status: EntitlementStatus;
+  source: EntitlementSource;
+  starts_at: string;
+  expires_at?: string | null;
+  remaining_recordings?: number | null;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  stripe_checkout_session_id?: string | null;
+  granted_by_admin?: string | null;
+  created_at: string;
+  updated_at: string;
+  // joined
+  plan?: PricingPlan;
+}
+
+export interface RecordingEntitlement {
+  id: string;
+  recording_id: string;
+  user_id: string;
+  plan_id: string;
+  status: RecordingEntitlementStatus;
+  stripe_checkout_session_id?: string | null;
+  purchase_id?: string | null;
+  created_at: string;
+  plan?: PricingPlan;
+}
+
+export interface ResolvedEntitlement {
+  effectivePlan: PricingPlan | null;
+  billingModel: BillingModel | null;
+  enabledFeatures: {
+    allowedFilterPresets: FilterPresetType[];
+    allowedVinylPresets: string[];
+    allowedBgMusicIds: string[];
+    allowedVinylStyles: VinylStyleType[];
+    canAdjustCrackle: boolean;
+    canDownload: boolean;
+    canUsePrivateVisibility: boolean;
+    canUseAdvancedMixer: boolean;
+  };
+  durationLimit: number;
+  remainingUsage?: number | null;
+  source: EntitlementSource | 'free' | 'per_recording' | null;
+  expiration?: string | null;
+  status: EntitlementStatus | RecordingEntitlementStatus | 'none';
+  reason?: string;
+  isPremium: boolean;
+  userEntitlement?: UserEntitlement | null;
+  recordingEntitlement?: RecordingEntitlement | null;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  action: string;
+  target_user_id?: string | null;
+  target_plan_id?: string | null;
+  target_recording_id?: string | null;
+  before_data?: Record<string, unknown> | null;
+  after_data?: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  admin_session_id?: string | null;
+  admin_user_id?: string | null;
+  created_at: string;
+}
+
+export interface AuthUser {
+  id: string;
+  email?: string;
+  email_confirmed_at?: string | null;
+  last_sign_in_at?: string | null;
+  provider?: string;
+  providers?: string[];
 }

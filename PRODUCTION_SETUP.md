@@ -1,95 +1,108 @@
-# Production setup checklist
+# Production setup checklist — Auth, Entitlements, Stripe, R2, Worker
 
-This file contains only manual configuration required outside the repository.
-Never put real secrets here or in Git.
+Never put real secrets in Git.
 
-## REQUIRED NOW
+## Vercel (Next.js)
 
-### Vercel
+1. Connect branch `arena/01a0b1c1-vynyl-record` to Vercel project
+2. Env:
+   - `NEXT_PUBLIC_APP_URL=https://YOUR_DOMAIN`
+   - `ADMIN_PASSWORD=long-random`
+   - `ADMIN_SESSION_SECRET=different-long-random`
+   - `R2_UPLOAD_SECRET=long-random`
+   - `PROCESSING_WORKER_SECRET=long-random`
+   - `NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...`
+   - `SUPABASE_SERVICE_ROLE_KEY=eyJ...` (service role, never expose to client)
+   - `STRIPE_SECRET_KEY=sk_live_...` (or sk_test for staging)
+   - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...`
+   - `STRIPE_WEBHOOK_SECRET=whsec_...`
+   - Optional: `OPENAI_API_KEY`
+   - Optional: R2 vars below
+3. Redeploy, verify commit SHA matches branch tip
 
-1. Connect the repository branch `arena/01a044ab-vynyl-record` to the existing Vercel project.
-2. Set `NEXT_PUBLIC_APP_URL` to the final HTTPS production origin.
-3. Set `ADMIN_PASSWORD` and a different long random `ADMIN_SESSION_SECRET`.
-4. Set `R2_UPLOAD_SECRET` to a new long random secret.
-5. Set `PROCESSING_WORKER_SECRET` to a separate long random worker secret.
-6. Redeploy and confirm the deployment commit matches the GitHub branch tip.
+## Supabase
 
-### Supabase
+1. Set env vars as above
+2. Run `SUPABASE_SETUP.sql` in SQL Editor (idempotent, includes 00010)
+3. Auth → Providers:
+   - Enable Email, enable Confirm email for prod
+   - Site URL = `https://YOUR_DOMAIN`
+   - Redirect URLs: `/login`, `/signup`, `/auth/callback`, `/reset-password`, `/account`, `/library`, `/studio`, `/*` for dev
+4. Auth → Providers → Google:
+   - Create OAuth client in Google Cloud Console (authorized redirect = `https://YOUR_PROJECT.supabase.co/auth/v1/callback`)
+   - Enable Google in Supabase, paste Client ID/Secret
+5. Verify RLS enabled, 00007 and 00010 applied
+6. Optional: pg_cron for `requeue_stale_jobs`
 
-1. Configure:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-2. Apply migrations `00001` through `00009` in numeric order (or run the consolidated `SUPABASE_SETUP.sql`).
-3. Enable Supabase Auth email/password sign-up if customer accounts are wanted now.
-4. Verify email redirect URLs point to `${NEXT_PUBLIC_APP_URL}/login`.
-5. Confirm Row Level Security is enabled and migration `00007_rls_hardening.sql` has run.
+## Cloudflare R2
 
-### Cloudflare R2
-
-1. Create one private R2 bucket.
-2. Create an R2 API token scoped only to that bucket with Object Read and Object Write permissions.
-3. Set:
+1. Create private bucket
+2. API token scoped to bucket Read+Write
+3. Env:
    - `R2_ACCOUNT_ID`
    - `R2_ACCESS_KEY_ID`
    - `R2_SECRET_ACCESS_KEY`
    - `R2_BUCKET`
    - `R2_REGION=auto`
-4. Leave `R2_PUBLIC_BASE` empty for private objects and signed playback/download URLs.
-5. Configure bucket CORS to allow the production origin for `PUT`, `GET`, and `HEAD` with `Content-Type` and `Range` headers.
+   - Leave `R2_PUBLIC_BASE` empty for signed URLs
+4. CORS: allow production origin for PUT, GET, HEAD with Content-Type, Range
 
-### Persistent processing worker
+## Processing Worker
 
-1. Deploy the **repository root** to Railway, Fly.io, Render, or a small VPS; the worker intentionally imports the shared app audio/queue modules.
-2. Use `npm ci` as the build command and `npm run worker` as the start command.
-3. Set on the worker:
+1. Deploy repo root to Railway/Fly/Render/VPS
+2. Build `npm ci`, Start `npm run worker`
+3. Env:
    - `NODE_ENV=production`
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
-   - `R2_ACCOUNT_ID`
-   - `R2_ACCESS_KEY_ID`
-   - `R2_SECRET_ACCESS_KEY`
-   - `R2_BUCKET`
-   - `R2_REGION=auto`
+   - R2 vars
    - `WORKER_POLL_MS=2500`
-4. Ensure the bundled FFmpeg binary is executable, or install system FFmpeg.
-5. Keep `ALLOW_INLINE_FFMPEG` unset or false on Vercel. The worker, not Vercel, owns long FFmpeg jobs.
-6. Run at least one worker process. Multiple workers are supported by the shared atomic claim function.
+   - `PROCESSING_WORKER_SECRET`
+4. Ensure FFmpeg binary executable
+5. Keep `ALLOW_INLINE_FFMPEG` false on Vercel
+6. Run at least 1 worker, multiple supported via atomic claim
+
+## Stripe
+
+1. Set keys as above
+2. Webhook endpoint: `https://YOUR_DOMAIN/api/webhook/stripe`
+   - Events: checkout.session.completed, customer.subscription.created, updated, deleted, invoice.paid, invoice.payment_failed, charge.refunded / refund.created
+3. Verify signing secret
+4. Products/Prices: Admin edits plan amount → new Stripe Price created, old archived, existing subs untouched. Check sync status in admin UI.
+5. Test mode: if keys missing, checkout uses `demo_session_*` and webhook returns simulated note — cannot grant prod access
+
+## Manual Provider Configuration (Summary)
+
+### Supabase Email
+
+- Enable email provider
+- Enable email confirmation
+- Site URL = production origin
+- Redirect URLs include `/auth/callback`, `/login`, `/reset-password`, etc.
+
+### Google OAuth
+
+- Google Cloud → OAuth consent + Client ID (Web app)
+- Authorized JS origins: prod + localhost
+- Authorized redirect: `https://PROJECT.supabase.co/auth/v1/callback`
+- Supabase → Auth → Providers → Google → Enable, paste ID/Secret
+- Vercel env: Supabase URL/keys + NEXT_PUBLIC_APP_URL
 
 ### Stripe
 
-1. Set `STRIPE_SECRET_KEY`.
-2. Set `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`.
-3. Set `STRIPE_WEBHOOK_SECRET`.
-4. Configure the Stripe webhook endpoint:
-   `https://YOUR_DOMAIN/api/webhook/stripe`
-5. Subscribe at minimum to `checkout.session.completed`.
-6. Verify the webhook signing secret matches the production endpoint.
+- Product/Price creation/sync via admin UI (price change → new Price)
+- Webhook endpoint and events as above
 
-## OPTIONAL
+## Security
 
-### AI writing assistant
+- All admin mutations require admin HMAC cookie + service role
+- No secrets in client bundles
+- Server-side entitlement resolution via `resolveUserEntitlement(userId, recordingId?)`
+- Studio, processing, downloads, visibility, checkout enforce server-side
+- Never trust browser plan ID, premium boolean, price
 
-Set one provider key:
+## Testing checklist
 
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-
-The core recorder works without either key. Without a key, the writing assistant uses an editable local template and Whisper transcription is disabled.
-
-### Transcription
-
-Set `OPENAI_API_KEY`. The persistent worker will use the transcription provider and save timestamped words into `record_transcripts`.
-
-### Domain and sharing
-
-Set the canonical domain in `NEXT_PUBLIC_APP_URL`, then add it to Supabase Auth redirect URLs, R2 CORS, and Stripe success/cancel URLs.
-
-## FUTURE
-
-- Cloudflare Queue or another queue transport in place of Supabase polling.
-- Move the worker from the application bridge endpoint to direct shared worker-module execution.
-- Social-video worker for 9:16 MP4 rendering.
-- Scheduled gift delivery provider and email delivery domain.
-- Physical vinyl manufacturing / fulfillment.
+- Email signup, verification callback, login, logout, forgot/reset, magic link, Google callback structure, profile creation, free entitlement, per-recording, monthly, lifetime, expired/revoked, admin assign, suspend, price edit, webhook idempotency, RLS isolation, studio enforcement, checkout price trust, build
