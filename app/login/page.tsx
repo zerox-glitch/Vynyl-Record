@@ -30,7 +30,7 @@ export default function CustomerLoginPage() {
     setLoading(true); setError(''); setMessage('');
     const supabase = createSupabaseBrowserClient();
     if (!supabase) {
-      setError('Authentication is not configured yet. Check Supabase env.');
+      setError('Auth not configured: Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel env. Add them in Vercel Dashboard → Settings → Environment Variables and redeploy.');
       setLoading(false);
       return;
     }
@@ -50,7 +50,7 @@ export default function CustomerLoginPage() {
     setLoading(true); setError(''); setMessage('');
     const supabase = createSupabaseBrowserClient();
     if (!supabase) {
-      setError('Authentication not configured.');
+      setError('Auth not configured: Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel env.');
       setLoading(false);
       return;
     }
@@ -71,7 +71,7 @@ export default function CustomerLoginPage() {
     setError(''); setMessage('');
     const supabase = createSupabaseBrowserClient();
     if (!supabase) {
-      setError('Authentication not configured.');
+      setError('Auth not configured: Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel. Add them and redeploy.');
       return;
     }
     const origin = window.location.origin;

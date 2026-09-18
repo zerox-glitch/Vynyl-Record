@@ -11,7 +11,7 @@ export function OAuthButtons({ next }: { next?: string }) {
     setLoading('google');
     const supabase = createSupabaseBrowserClient();
     if (!supabase) {
-      setError('Authentication is not configured yet.');
+      setError('Auth not configured: Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel env. Add them in Vercel Dashboard → Settings → Environment Variables and redeploy.');
       setLoading(null);
       return;
     }
@@ -33,7 +33,7 @@ export function OAuthButtons({ next }: { next?: string }) {
     setLoading('magic');
     const supabase = createSupabaseBrowserClient();
     if (!supabase) {
-      setError('Authentication is not configured yet.');
+      setError('Auth not configured: Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel env. Add them in Vercel → Settings → Environment Variables and redeploy.');
       setLoading(null);
       return { error: 'not configured' };
     }
