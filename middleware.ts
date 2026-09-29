@@ -21,6 +21,11 @@ function getSafeNext(nextParam: string | null, origin: string): string {
  * - /admin uses the existing signed HMAC cookie.
  * - customer pages use Supabase Auth cookies and are refreshed here.
  * Also handles safe next-page redirect and session-expired for protected routes.
+ *
+ * Cookie handling uses getAll/setAll (not deprecated get/set/remove) for robust
+ * chunked cookie support. Supabase SSR splits large JWTs into multiple chunks
+ * (e.g. sb-xxx-auth-token.0, .1) and PKCE verifiers into separate cookies.
+ * Using getAll/setAll ensures all chunks are read/written atomically.
  */
 export async function middleware(req: NextRequest) {
   if (req.nextUrl.pathname.startsWith('/admin')) {
@@ -33,23 +38,36 @@ export async function middleware(req: NextRequest) {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+  // If Supabase not configured (e.g. preview without env), allow request through
+  // without crashing — lib/db.ts will use local fallback.
   if (!supabaseUrl || !supabaseAnonKey) return NextResponse.next();
 
-  let response = NextResponse.next({ request: { headers: req.headers } });
+  // Use request as base for response so cookies, headers, etc. are preserved.
+  // Supabase docs recommend: let response = NextResponse.next({ request })
+  let response = NextResponse.next({ request: req });
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
-      getAll() { return req.cookies.getAll(); },
+      getAll() {
+        return req.cookies.getAll();
+      },
       setAll(cookiesToSet) {
+        // First, update the request cookies so the Supabase client sees the new values
+        // within this same request (needed for PKCE verifier flow).
         cookiesToSet.forEach(({ name, value }) => req.cookies.set(name, value));
-        response = NextResponse.next({ request: { headers: req.headers } });
+        // Recreate response with updated request so Set-Cookie headers are correct
+        response = NextResponse.next({ request: req });
+        // Then set cookies on the response (browser will receive them)
         cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
       },
     },
   });
 
+  // Refresh session if needed. getUser validates with Supabase Auth server.
+  // This also handles PKCE code verifier cleanup and token refresh rotation.
+  // We use getUser (not getSession) for security - it validates JWT with server.
   const { data: { user } } = await supabase.auth.getUser();
 
-  // Protected customer routes
+  // Protected customer routes - redirect to login with safe next
   const protectedPaths = ['/account'];
   const isProtected = protectedPaths.some(p => req.nextUrl.pathname === p || req.nextUrl.pathname.startsWith(p + '/'));
 
@@ -59,7 +77,18 @@ export async function middleware(req: NextRequest) {
     const loginUrl = new URL('/login', req.url);
     loginUrl.searchParams.set('next', next);
     loginUrl.searchParams.set('expired', '1');
-    return NextResponse.redirect(loginUrl);
+    // Return redirect response - note: we must use a new redirect response, not the `response` above,
+    // because the Supabase client may have set cookies that need to be preserved.
+    // However for unauthenticated users there are no new cookies, so simple redirect is fine.
+    // If we had refreshed cookies, they are already in `response`, but redirect discards them.
+    // In practice, unauthenticated users have no refresh, so no loss.
+    // For safety, we copy any cookies from `response` to the redirect if needed.
+    const redirectResponse = NextResponse.redirect(loginUrl);
+    // Preserve any Set-Cookie from the Supabase refresh (rare for unauthenticated)
+    response.cookies.getAll().forEach(cookie => {
+      redirectResponse.cookies.set(cookie.name, cookie.value, cookie as any);
+    });
+    return redirectResponse;
   }
 
   // Validate next param on login/signup to prevent open redirect - if next is unsafe, rewrite to safe
@@ -73,7 +102,12 @@ export async function middleware(req: NextRequest) {
       req.nextUrl.searchParams.forEach((v, k) => {
         if (k !== 'next') url.searchParams.set(k, v);
       });
-      return NextResponse.redirect(url);
+      const redirectResponse = NextResponse.redirect(url);
+      // Preserve cookies
+      response.cookies.getAll().forEach(cookie => {
+        redirectResponse.cookies.set(cookie.name, cookie.value, cookie as any);
+      });
+      return redirectResponse;
     }
   }
 
