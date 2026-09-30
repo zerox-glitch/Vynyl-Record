@@ -347,7 +347,7 @@ class TurntableScene(private val context: Context) {
         for (part in parts) {
             val material = materials[part.kind] ?: continue
             if (part.kind != currentKind || material !== currentMaterial) {
-                uploadMaterial(turntableUniforms!!, turntable, material)
+                uploadMaterial(turntableUniforms!!, turntable, material, part.kind, pose.lampLevel)
                 currentKind = part.kind
                 currentMaterial = material
             }
@@ -461,10 +461,6 @@ class TurntableScene(private val context: Context) {
     private fun buildNodeMatrices(pose: TurntableAnimator) {
         val platterX = TurntableSpec.PLATTER_CENTER_X
         val platterZ = TurntableSpec.PLATTER_CENTER_Z
-        val pivotX = TurntableSpec.TONEARM_PIVOT_X
-        val pivotY = TurntableSpec.TONEARM_PIVOT_HEIGHT
-        val pivotZ = TurntableSpec.TONEARM_PIVOT_Z
-
         Mat4.identity(nodeMatrices, Node.WORLD.ordinal * Mat4.SIZE)
 
         // Platter: a plain spin about the platter's own vertical axis.
@@ -486,14 +482,27 @@ class TurntableScene(private val context: Context) {
             Mat4.multiply(nodeMatrices, recordOffset, scratchMatrix, 0, nodeMatrices, recordOffset)
         }
 
-        // Arm: yaw about the pivot post, then cock up about the pivot's horizontal axis. The lift is
-        // expressed as a rotation of the whole arm about its own bearing, which is what the stub
-        // height in TurntableSpec is derived from.
+        // Arm: cock the stylus up off the record, then yaw the whole arm about its bearing.
+        //
+        // `translate(pivot) * yaw * lift * translate(-pivot)` is evaluated right to left, so the
+        // cueing lift is applied with the bearing at the origin -- about the pivot's own horizontal
+        // axis, which raises the +X stylus end -- and the yaw then swings the arm to its position
+        // over the record. Composing the two the other way round would roll the yawed arm sideways
+        // instead of lifting it.
+        //
+        // This form is correct for *world-space* meshes, which is why TurntableBuilder bakes the
+        // bearing into the arm, the stylus and the brass pivot hardware. When the arm meshes were
+        // left pivot-local, this same matrix threw the assembly 240 mm off its bearing: the arm
+        // rendered beside the platter with the counterweight hanging off the front of the plinth.
         val armOffset = Node.ARM.ordinal * Mat4.SIZE
-        Mat4.setTranslation(pivotX, pivotY, pivotZ, scratchMatrix, 0)
+        Mat4.setTranslation(TurntableSpec.TONEARM_PIVOT_X, TurntableSpec.TONEARM_PIVOT_Y, TurntableSpec.TONEARM_PIVOT_Z, scratchMatrix, 0)
         Mat4.rotateY(scratchMatrix, 0, -pose.tonearmAngleDeg, scratchMatrix, 0)
         Mat4.rotateZ(scratchMatrix, 0, pose.tonearmLift01 * TurntableSpec.TONEARM_LIFT_MAX_DEG, scratchMatrix, 0)
-        Mat4.translate(scratchMatrix, 0, -pivotX, -pivotY, -pivotZ, nodeMatrices, armOffset)
+        Mat4.translate(
+            scratchMatrix, 0,
+            -TurntableSpec.TONEARM_PIVOT_X, -TurntableSpec.TONEARM_PIVOT_Y, -TurntableSpec.TONEARM_PIVOT_Z,
+            nodeMatrices, armOffset,
+        )
 
         // Needle: the arm's pose plus the groove flutter, which is a fraction of a millimetre.
         val needleOffset = Node.NEEDLE.ordinal * Mat4.SIZE
@@ -566,7 +575,13 @@ class TurntableScene(private val context: Context) {
         program.setFloat(uniforms.shadowBias, environment.shadowBias)
     }
 
-    private fun uploadMaterial(uniforms: TurntableUniforms, program: ShaderProgram, material: Material) {
+    private fun uploadMaterial(
+        uniforms: TurntableUniforms,
+        program: ShaderProgram,
+        material: Material,
+        kind: MaterialLibrary.Kind,
+        lampLevel: Float,
+    ) {
         program.setVec3(uniforms.albedo, material.albedo, 0)
         program.setVec3(uniforms.specularTint, material.specularTint, 0)
         program.setFloat(uniforms.roughness, material.roughness.value)
@@ -577,7 +592,14 @@ class TurntableScene(private val context: Context) {
         program.setFloat(uniforms.opacity, material.opacity.value)
         program.setFloat(uniforms.ambientOcclusion, material.ambientOcclusion.value)
         program.setVec3(uniforms.emissive, material.emissive, 0)
-        program.setFloat(uniforms.emissionStrength, material.emissionStrength.value)
+        // The indicator lamp is driven by the mechanism's own lamp level, so the deck shows its
+        // state even when nothing else in the scene is bright.
+        val emission = if (kind == MaterialLibrary.Kind.INDICATOR_LAMP) {
+            0.35f + 1.05f * lampLevel.coerceIn(0f, 1f)
+        } else {
+            material.emissionStrength.value
+        }
+        program.setFloat(uniforms.emissionStrength, emission)
 
         val textured = material.useLabelTexture.value
         program.setInt(uniforms.useLabelTexture, if (textured) 1 else 0)

@@ -129,7 +129,10 @@ float fbm(vec2 p) {
  *
  * Returns a relief height in [-1, 0]: 0 on the land (ridge), -1 at the trough bottom.
  */
-float grooveHeight(float radial, float radius, float angle) {
+const float BAND_GROOVES = 33.0;   // grooves per visible band: 33 * 6.7e-5 m = 2.2 mm
+const float BAND_DEPTH = 0.45;     // banding amplitude as a fraction of the fine relief
+
+float grooveHeight(float radial, float radius, float angle, float bandWeight) {
     // Off-centre pressing wobble keeps the pattern non-axisymmetric, so the relief (and
     // therefore the moving highlight) visibly turns with the platter.
     float wobble = cos(angle) * 0.62 + sin(angle * 2.0 + 1.1) * 0.28;
@@ -149,11 +152,25 @@ float grooveHeight(float radial, float radius, float angle) {
     float halfWidth = 0.225;
     float offset = (phase - centre) / halfWidth;
 
-    if (abs(offset) >= 1.0) {
-        return 0.0;   // land between grooves
+    float fine = 0.0;
+    if (abs(offset) < 1.0) {
+        float profile = cos(offset * PI * 0.5);
+        fine = -profile * profile;   // 0 on the land, -1 at the trough bottom
     }
-    float profile = cos(offset * PI * 0.5);
-    return -profile * profile;
+
+    // Coarse banding: BAND_GROOVES grooves summed into one resolvable ridge/trough pair.
+    //
+    // This is the term the eye actually reads at normal viewing distance. A single microgroove is
+    // 67 um across and one fragment of a phone screen covers five of them, so the fine profile can
+    // never be shown at a normal framing -- but the way light and shadow clump across a couple of
+    // dozen grooves is exactly what makes a pressing look like a pressing in a photograph.
+    float bandPitch = pitch * BAND_GROOVES;
+    float bandPhase = effectiveRadius / bandPitch;
+    // Amplitude drifts slowly across the side so the banding never reads as a printed target.
+    float bandAmplitude = BAND_DEPTH * (0.72 + 0.28 * sin(effectiveRadius * 96.0));
+    float band = (-0.5 + 0.5 * cos(bandPhase * TWO_PI)) * bandAmplitude;
+
+    return mix(fine, band, clamp(bandWeight, 0.0, 1.0));
 }
 
 // Analytic soft shadow of a horizontal disc, projected onto this fragment along -keyLight.
@@ -232,16 +249,28 @@ void main() {
         float bandPosition = (radius - uGrooveRange.x) / band;
 
         if (bandPosition >= 0.0 && bandPosition <= 1.0) {
-            // Level of detail: how many grooves fall inside a single fragment.
+            // Level of detail, in two terms:
+            //  * fineFade keeps the 67 um relief only where a fragment is narrower than about one
+            //    groove (a fragment is 0.35 mm across at the default framing -- five grooves -- so
+            //    this only appears when the camera is pushed right in);
+            //  * bandFade keeps the 2.2 mm banding until *that* becomes sub-pixel too.
+            // Between them the disc always shows radial structure: individual grooves up close,
+            // concentric sheen bands at normal viewing distance. (The old single window faded out
+            // at about one groove per fragment, which on a phone happens at *every* camera
+            // distance -- so the disc rendered as a plain black circle.)
             float groovesPerFragment = fwidth(radius) / max(uGroovePitch, 1.0e-6);
-            float lodFade = 1.0 - smoothstep(0.42, 0.95, groovesPerFragment);
-            float relief = uGrooveStrength * detail * lodFade;
+            float fineFade = 1.0 - smoothstep(0.75, 1.75, groovesPerFragment);
+            float bandsPerFragment = groovesPerFragment / BAND_GROOVES;
+            float bandFade = 1.0 - smoothstep(0.55, 1.70, bandsPerFragment);
+            float bandWeight = bandFade * (1.0 - fineFade);
+            float bandDetail = mix(0.55, 1.0, detail);
+            float relief = uGrooveStrength * max(fineFade, bandDetail * bandWeight);
 
             if (relief > 0.002) {
                 const float radialStep = 0.00035;   // metres, well inside one groove pitch
-                float h0 = grooveHeight(bandPosition, radius, angle);
-                float hp = grooveHeight((radius + radialStep - uGrooveRange.x) / band, radius + radialStep, angle);
-                float hm = grooveHeight((radius - radialStep - uGrooveRange.x) / band, radius - radialStep, angle);
+                float h0 = grooveHeight(bandPosition, radius, angle, bandWeight);
+                float hp = grooveHeight((radius + radialStep - uGrooveRange.x) / band, radius + radialStep, angle, bandWeight);
+                float hm = grooveHeight((radius - radialStep - uGrooveRange.x) / band, radius - radialStep, angle, bandWeight);
 
                 // d(height)/d(radius): the grooves are concentric, so the whole relief
                 // gradient lives along the radial (bitangent) direction.
@@ -253,14 +282,17 @@ void main() {
                 normal = normalize(mix(normal, perturbed, relief));
 
                 // Troughs sit in shadow: lands read brighter than the groove walls.
-                grooveOcclusion = mix(1.0, 0.74 + 0.26 * (1.0 + h0), relief);
+                grooveOcclusion = mix(1.0, 0.58 + 0.42 * (1.0 + h0), relief);
             }
 
             // Grooves are strongly anisotropic, so the specular response is swept by the
             // groove direction. Locked to object space, this is what makes the highlight
             // visibly travel around the disc as the platter turns.
-            float sweep = 1.0 + 0.055 * cos(angle * 2.0 + radial01 * 61.0) * relief;
-            grooveSpecularModulation = mix(1.0, sweep, detail);
+            float sweep = 1.0 + 0.06 * cos(angle * 2.0 + radial01 * 61.0) * relief;
+            // The radial sheen is the concentric ring pattern a pressing shows under a studio
+            // light; without it the disc reads as a flat black mirror.
+            float sheen = 1.0 + 0.13 * cos(radial01 * 210.0 + 0.6) * relief;
+            grooveSpecularModulation = mix(1.0, sweep * sheen, max(detail, 0.5));
         }
     }
 
@@ -312,10 +344,17 @@ void main() {
     vec3 ambient = mix(uAmbientFloor, uAmbientSky, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0));
     vec3 ambientDiffuse = diffuseColor * ambient * occlusion * (1.0 + uFresnelBoost * 0.2);
 
+    // Camera-facing wrap fill, standing in for the softbox the viewer never sees. A single
+    // near-overhead key light puts everything on the top faces and leaves the sides of the plinth
+    // as a black silhouette; this term keeps every surface the camera can see lit from somewhere.
+    float wrapFacing = max(dot(normal, viewDir), 0.0);
+    vec3 viewFill = diffuseColor * mix(uAmbientSky, uKeyColor, 0.22) * (0.05 + 0.50 * wrapFacing);
+
     vec3 color = keyDiffuse * visibility + keySpecular * mix(1.0, visibility, 0.65);
     color += fillDiffuse * visibility + fillSpecular * visibility;
     color += rimDiffuse * occlusion + rimSpecular * occlusion;
     color += ambientDiffuse;
+    color += viewFill * visibility;
 
     // Clearcoat: a tight additive second lobe over the base material.
     if (uClearcoat > 0.001) {

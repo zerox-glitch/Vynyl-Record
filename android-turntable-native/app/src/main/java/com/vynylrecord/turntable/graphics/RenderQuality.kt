@@ -34,7 +34,9 @@ enum class RenderQuality(
         maxRenderSize = 720,
         msaaSamples = 0,
         contactShadows = false,
-        grooveDetail = 0f,
+        // Groove relief is analytic -- it costs three extra function calls in the fragment shader
+        // and no extra passes -- so even the Low preset keeps the coarse banding visible.
+        grooveDetail = 0.45f,
         edgeResolve = 0.75f,
         grain = false,
         labelTextureSize = 512,

@@ -36,8 +36,10 @@ object TurntableBuilder {
         /** Stylus tip: [TonearmGeometry.EFFECTIVE_LENGTH] out, landing on the record surface. */
         const val STYLUS_TIP_Y: Float = TurntableSpec.RECORD_TOP - TurntableSpec.TONEARM_PIVOT_Y
 
-        const val COUNTERWEIGHT_START_X = -0.050f
-        const val COUNTERWEIGHT_END_X = -0.077f
+        // Kept compact: the tail swings outboard as the arm tracks inwards, and at the run-out
+        // groove a longer overhang put the counterweight past the right edge of the plinth.
+        const val COUNTERWEIGHT_START_X = -0.048f
+        const val COUNTERWEIGHT_END_X = -0.070f
         const val COUNTERWEIGHT_RADIUS = 0.019f
 
         /** Unit vector of the headshell axis (tube end towards the stylus). */
@@ -261,7 +263,9 @@ object TurntableBuilder {
             outerRadius = TurntableSpec.RECORD_RADIUS - bevelWidth,
             y = TurntableSpec.RECORD_THICKNESS,
             segments = large,
-            rings = if (detail.grooves) 5 else 3,
+            // More rings means the normalised V coordinate tracks the physical radius more exactly,
+            // which the groove shader depends on to place its pitch.
+            rings = if (detail.grooves) 8 else 4,
         ), TurntableSpec.PLATTER_CENTER_X, TurntableSpec.RECORD_BOTTOM, TurntableSpec.PLATTER_CENTER_Z)
 
         val label = place(MeshFactory.planarAnnulus(
@@ -339,7 +343,7 @@ object TurntableBuilder {
         val counterweightShaft = MeshFactory.tubeBetween(
             name = "counterweightShaft",
             startX = -0.026f, startY = 0.0016f, startZ = 0f,
-            endX = -0.082f, endY = 0.0032f, endZ = 0f,
+            endX = -0.074f, endY = 0.0032f, endZ = 0f,
             radius = 0.0034f,
             segments = small,
             capEnd = true,
@@ -398,7 +402,13 @@ object TurntableBuilder {
             height = 0.008f,
         )
         tonearmBuilder.append(yoke, null)
-        val tonearm = tonearmBuilder.build()
+        // Baked into world space at the bearing, like `pivotBrass` above. The renderer applies one
+        // matrix per node, so every mesh on the arm node has to live in the same space -- leaving
+        // these pivot-local put the arm a fifth of a metre off its bearing.
+        val tonearm = place(
+            tonearmBuilder.build(),
+            TurntableSpec.TONEARM_PIVOT_X, TurntableSpec.TONEARM_PIVOT_Y, TurntableSpec.TONEARM_PIVOT_Z,
+        )
 
         // ---------------------------------------------------------------- stylus / needle
         // Kept as its own mesh so it can carry the touch-down micro movement independently.
@@ -423,7 +433,10 @@ object TurntableBuilder {
             tipMatrix, 0,
         )
         needleBuilder.append(stylusTip, tipMatrix)
-        val needle = needleBuilder.build()
+        val needle = place(
+            needleBuilder.build(),
+            TurntableSpec.TONEARM_PIVOT_X, TurntableSpec.TONEARM_PIVOT_Y, TurntableSpec.TONEARM_PIVOT_Z,
+        )
 
         // ---------------------------------------------------------------- arm rest
         val restDirectionX = cos(Math.toRadians(TurntableSpec.TONEARM_REST_ANGLE_DEG.toDouble())).toFloat()

@@ -87,13 +87,17 @@ Custom OpenGL ES 3.0 forward renderer, no engine, no scene format.
   fresnel boost, opacity, emissive and a brushed-metal mode. Fifteen material kinds cover lacquered
   wood, brushed brass, polished aluminium, black rubber, glossy or smoked vinyl, paper and steel.
 * **Grooves** — the record's playing surface emits `u = angle/2π` and `v = radius`; the fragment
-  shader recovers a *metric* radius from `uDiscRadialRange`, lays grooves at a 67 µm pitch, derives
-  the bitangent from the radial gradient for the anisotropic highlight, fades relief out with
-  `fwidth()` at distance, and modulates the specular with an angular term so the disc visibly turns.
-* **Lighting** — a warm key light, a soft amber fill and a cool rim, plus a sky/floor ambient
-  gradient. Shadowing is analytic: a disc shadow under the platter, a soft blob under the arm, and a
-  rounded-rectangle shadow under the plinth, all evaluated in the material shader against the real
-  ground plane.
+  shader recovers a *metric* radius from `uDiscRadialRange` (which tracks the annulus that surface is
+  actually built from), lays grooves at a 67 µm pitch, derives the bitangent from the radial gradient
+  for the anisotropic highlight, and modulates the specular with an angular term so the disc visibly
+  turns. Relief is level-of-detail aware in two terms: the individual 67 µm grooves appear only when
+  a fragment is narrower than one groove, and below that they resolve into ~2.2 mm concentric bands,
+  so the pressing still shows radial structure at normal viewing distance instead of aliasing into
+  moiré or flattening into a plain black disc.
+* **Lighting** — a warm three-quarter key, a soft amber fill, a cool rim, a camera-facing wrap fill
+  and a sky/floor ambient gradient. Shadowing is analytic: a disc shadow under the platter, a soft
+  blob under the arm, and a rounded-rectangle shadow under the plinth, all evaluated in the material
+  shader against the real ground plane.
 * **Environment** — no HDRI. A full-screen procedural pass paints the studio backdrop (warm cream to
   dusty rose to deep stone), a floor plane whose horizon tracks the real camera, a key-light bloom
   placed where the light actually is, restrained film grain, and a vignette tinted by the vinyl

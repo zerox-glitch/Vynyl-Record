@@ -1,6 +1,7 @@
 package com.vynylrecord.turntable.graphics.geometry
 
 import com.vynylrecord.turntable.graphics.geometry.MeshFactory.GeometryDetail
+import com.vynylrecord.turntable.model.TonearmGeometry
 import com.vynylrecord.turntable.model.TurntableSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -91,14 +92,35 @@ class TurntableBuilderTest {
     }
 
     @Test
-    fun `arm parts are positioned around the pivot`() {
+    fun `every mesh on the arm node is baked at the bearing`() {
         val meshes = TurntableBuilder.build(GeometryDetail.MEDIUM)
+
+        // The renderer applies one matrix per node, so all three arm meshes have to agree on a
+        // coordinate space: the arm, the stylus and the brass pivot hardware are built in
+        // pivot-local space and then placed at the bearing. Mixing spaces here -- which is what put
+        // the arm beside the platter with its counterweight off the front of the deck -- is caught
+        // by ArmPlacementTest, which checks where the stylus actually ends up.
         val arm = meshes.tonearm
         assertTrue(
-            "the tonearm mesh is arm-local, so it must start at the pivot",
-            abs(arm.bounds.minX - TurntableSpec.TONEARM_PIVOT_X) < 0.01f,
+            "the counterweight must reach behind the pivot: minX=${arm.bounds.minX}",
+            arm.bounds.minX < TurntableSpec.TONEARM_PIVOT_X - 0.03f,
         )
-        assertTrue("the arm must reach the pivot height", abs(arm.bounds.centerY - TurntableSpec.TONEARM_PIVOT_Y) < 0.05f)
+        assertTrue(
+            "the arm must reach out towards the stylus: maxX=${arm.bounds.maxX}",
+            arm.bounds.maxX >= TurntableSpec.TONEARM_PIVOT_X + TonearmGeometry.EFFECTIVE_LENGTH - 0.02f,
+        )
+        assertTrue(
+            "the arm must hang at its own bearing height: centreY=${arm.bounds.centerY}",
+            abs(arm.bounds.centerY - TurntableSpec.TONEARM_PIVOT_Y) < 0.02f,
+        )
+        assertTrue(
+            "the pivot brass must be centred on the pivot: centreX=${meshes.pivotBrass.bounds.centerX}",
+            abs(meshes.pivotBrass.bounds.centerX - TurntableSpec.TONEARM_PIVOT_X) < 0.01f,
+        )
+        assertTrue(
+            "the stylus is built at the bearing too: centreX=${meshes.needle.bounds.centerX}",
+            meshes.needle.bounds.centerX > TurntableSpec.TONEARM_PIVOT_X,
+        )
         assertTrue("the arm rest is on the deck beside the pivot", abs(meshes.armRest.bounds.centerX) > 0.1f)
     }
 

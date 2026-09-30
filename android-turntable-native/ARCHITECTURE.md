@@ -160,7 +160,7 @@ Custom OpenGL ES 3.0 renderer, three programs, no scene graph library, no glTF.
 
 | Program | Pass | Notes |
 | --- | --- | --- |
-| `turntable.vert/.frag` | deck | Cook-Torrance-ish direct lighting: warm directional key, amber inverse-square point fill, cool rim weighted by grazing angle, hemispheric ambient; fresnel + clearcoat; procedural groove relief from `fwidth`; analytic soft shadows; sRGB out |
+| `turntable.vert/.frag` | deck | Cook-Torrance-ish direct lighting: three-quarter warm key, amber inverse-square point fill, cool rim weighted by grazing angle, camera-facing wrap fill, hemispheric ambient; fresnel + clearcoat; procedural groove relief with a two-term `fwidth` LOD (individual grooves cross-fading into coarse concentric banding); analytic soft shadows; sRGB out |
 | `background.frag` | studio | warm cream → dusty rose → deep stone gradient, floor plane with fade, soft radial glow, optional grain — generated in the shader, never loaded |
 | `composite.frag` | resolve | premultiplied scene over backdrop, edge-directed resolve (FXAA-style), grain, vignette, exposure |
 

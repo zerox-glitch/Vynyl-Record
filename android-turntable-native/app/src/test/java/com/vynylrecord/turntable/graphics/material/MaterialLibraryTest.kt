@@ -1,5 +1,8 @@
 package com.vynylrecord.turntable.graphics.material
 
+import com.vynylrecord.turntable.graphics.geometry.MeshFactory.GeometryDetail
+import com.vynylrecord.turntable.graphics.geometry.TurntableBuilder
+import com.vynylrecord.turntable.model.TurntableSpec
 import com.vynylrecord.turntable.model.VinylStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -76,16 +79,22 @@ class MaterialLibraryTest {
     @Test
     fun `the disc radial range matches the record surface mesh`() {
         val record = MaterialLibrary.buildSet(VinylStyle.DEFAULT).getValue(MaterialLibrary.Kind.VINYL_RECORD)
+
+        // The shader turns the record top's normalised V coordinate back into a physical radius, so
+        // this range has to describe the annulus that surface was actually built from: the spindle
+        // hole out to the start of the edge bevel, not out to the full disc radius. Being 2.5 mm
+        // out here stretches and offsets every groove on the pressing.
+        val innerRadius = TurntableSpec.SPINDLE_RADIUS + 0.0002f
+        val outerRadius = TurntableSpec.RECORD_RADIUS - TurntableSpec.RECORD_EDGE_BEVEL_WIDTH
+        assertEquals("the shader recovers metric radii from this range", innerRadius, record.discRadialRange[0], 1e-5f)
+        assertEquals("the shader recovers metric radii from this range", outerRadius, record.discRadialRange[1], 1e-5f)
+
+        val surface = TurntableBuilder.build(GeometryDetail.LOW).recordTop
         assertEquals(
-            "the shader recovers metric radii from this range",
-            com.vynylrecord.turntable.model.TurntableSpec.SPINDLE_RADIUS + 0.0002f,
-            record.discRadialRange[0],
-            1e-5f,
-        )
-        assertEquals(
-            com.vynylrecord.turntable.model.TurntableSpec.RECORD_RADIUS,
-            record.discRadialRange[1],
-            1e-5f,
+            "the range must match the mesh the shader samples it against",
+            outerRadius,
+            surface.bounds.maxX - TurntableSpec.PLATTER_CENTER_X,
+            1e-4f,
         )
     }
 

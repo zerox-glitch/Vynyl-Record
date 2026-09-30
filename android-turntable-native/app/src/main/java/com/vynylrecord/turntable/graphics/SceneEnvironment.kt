@@ -27,9 +27,9 @@ class SceneEnvironment {
 
     @JvmField var glowPositionX = -0.16f
     @JvmField var glowPositionY = 0.34f
-    @JvmField var glowStrength = 0.42f
+    @JvmField var glowStrength = 0.34f
     @JvmField var grainStrength = 0.030f
-    @JvmField var vignetteStrength = 0.42f
+    @JvmField var vignetteStrength = 0.30f
     @JvmField var horizon = 0.30f
     @JvmField var floorFade = 0.85f
     @JvmField var grainEnabled = 1
@@ -37,14 +37,20 @@ class SceneEnvironment {
 
     // ------------------------------------------------------------------ lights (linear)
 
-    val keyDirection = floatArrayOf(-0.512f, 0.782f, 0.356f)
-    val keyColor = floatArrayOf(1.42f, 1.30f, 1.12f)
-    val fillPosition = floatArrayOf(0.30f, 0.42f, 0.26f)
+    // Key light: three-quarter from the front-right, not overhead. A near-vertical key lights the
+    // deck top and nothing else, which is what made the plinth sides read as a black silhouette
+    // against a bright backdrop; raking it down to ~35 degrees above the horizon puts the light on
+    // the faces the camera actually sees.
+    val keyDirection = floatArrayOf(-0.452f, 0.606f, 0.654f)
+    val keyColor = floatArrayOf(1.55f, 1.40f, 1.20f)
+    val fillPosition = floatArrayOf(0.26f, 0.36f, 0.30f)
     val fillColor = floatArrayOf(1.05f, 0.62f, 0.26f)
-    val rimDirection = floatArrayOf(0.40f, 0.34f, -0.85f)
-    val rimColor = floatArrayOf(0.52f, 0.66f, 0.95f)
-    val ambientFloor = floatArrayOf(0.030f, 0.020f, 0.016f)
-    val ambientSky = floatArrayOf(0.085f, 0.076f, 0.078f)
+    val rimDirection = floatArrayOf(0.34f, 0.30f, -0.89f)
+    val rimColor = floatArrayOf(0.74f, 0.88f, 1.18f)
+    // Ambient is the studio's bounce light, not a placeholder: with a near-black lacquer albedo a
+    // 0.03 ambient renders the entire deck at roughly 15/255 on screen.
+    val ambientFloor = floatArrayOf(0.098f, 0.082f, 0.072f)
+    val ambientSky = floatArrayOf(0.300f, 0.288f, 0.300f)
 
     // ------------------------------------------------------------------ contact shadows
 
@@ -58,12 +64,12 @@ class SceneEnvironment {
     val rectShadow = floatArrayOf(0f, 0f, TurntableSpec.PLINTH_WIDTH * 0.5f, TurntableSpec.PLINTH_DEPTH * 0.5f)
 
     @JvmField var shadowCeiling = TurntableSpec.PLINTH_TOP + 0.055f
-    @JvmField var shadowStrength = 0.85f
+    @JvmField var shadowStrength = 0.78f
     @JvmField var shadowBias = 0.0004f
 
     // ------------------------------------------------------------------ exposure
 
-    @JvmField var exposure = 1.04f
+    @JvmField var exposure = 1.18f
 
     /** Re-tints the environment for a vinyl style. Called from the GL thread on demand. */
     fun applyVinylStyle(style: VinylStyle) {
@@ -71,6 +77,13 @@ class SceneEnvironment {
         setDisplaySpace(backdropTop, palette.backdropTop)
         setDisplaySpace(backdropMid, palette.backdropMid)
         setDisplaySpace(backdropBottom, palette.backdropBottom)
+        // The backdrop is a lit cyclorama, not the subject: 12 % down keeps the vinyl the
+        // brightest thing in the frame instead of the wall behind it.
+        for (channel in 0..2) {
+            backdropTop[channel] *= BACKDROP_EXPOSURE
+            backdropMid[channel] *= BACKDROP_EXPOSURE
+            backdropBottom[channel] *= BACKDROP_EXPOSURE
+        }
 
         // Accent bloom picks up the style, desaturated a little so it stays tasteful.
         ColorPacking.toLinearRgb(palette.accent, glowColor)
@@ -88,6 +101,11 @@ class SceneEnvironment {
         fillColor[0] = fillColor[0] * 0.55f + 0.45f
         fillColor[1] = fillColor[1] * 0.55f + 0.28f
         fillColor[2] = fillColor[2] * 0.55f + 0.12f
+    }
+
+    private companion object {
+        /** Multiplier applied to every style's backdrop stops. */
+        const val BACKDROP_EXPOSURE = 0.88f
     }
 
     private fun setDisplaySpace(target: FloatArray, argb: Int) {

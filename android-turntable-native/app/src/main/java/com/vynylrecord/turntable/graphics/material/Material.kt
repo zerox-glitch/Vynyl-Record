@@ -46,8 +46,17 @@ class Material(val name: String) {
     val grooveEccentricity = Scalar(TurntableSpec.GROOVE_ECCENTRICITY)
     val grooveModulation = Scalar(0.8f)
 
-    /** Hole radius and outer radius of the disc being shaded. */
-    val discRadialRange = floatArrayOf(0.0038f, TurntableSpec.RECORD_RADIUS)
+    /**
+     * Hole radius and outer radius of the disc being shaded.
+     *
+     * Must match the annulus the record's top surface is actually built from
+     * (`radialAnnulusTop` spans the spindle hole to the edge bevel), because the shader recovers a
+     * physical radius from that mesh's normalised V coordinate. A mismatch offsets every groove.
+     */
+    val discRadialRange = floatArrayOf(
+        TurntableSpec.SPINDLE_RADIUS + 0.0002f,
+        TurntableSpec.RECORD_RADIUS - TurntableSpec.RECORD_EDGE_BEVEL_WIDTH,
+    )
 
     /** Inner and outer radius of the grooved audio band. */
     val grooveRange = floatArrayOf(TurntableSpec.AUDIO_BAND_INNER, TurntableSpec.AUDIO_BAND_OUTER)
@@ -103,14 +112,16 @@ object MaterialLibrary {
         val materials = LinkedHashMap<Kind, Material>(Kind.entries.size)
 
         materials[Kind.PLINTH_LACQUER] = Material("plinth-lacquer").apply {
-            // Near-black lacquer over dark walnut: a dark, warm dielectric with a glossy coat.
-            ColorPacking.toLinearRgb(0xFF1A1008.toInt(), albedo)
-            albedo[0] *= 1.35f
-            albedo[1] *= 1.15f
-            albedo[2] *= 0.9f
+            // Dark walnut under satin lacquer. Deliberately not "near-black": a genuinely black
+            // albedo cannot be lit at all, and on a phone screen it renders the whole deck as one
+            // flat silhouette no matter what the lights do.
+            ColorPacking.toLinearRgb(0xFF3A2416.toInt(), albedo)
+            albedo[0] *= 1.45f
+            albedo[1] *= 1.20f
+            albedo[2] *= 0.92f
             roughness.value = 0.30f
             metallic.value = 0.0f
-            reflectance.value = 0.055f
+            reflectance.value = 0.07f
             clearcoat.value = 0.55f
             fresnelBoost.value = 0.12f
             ambientOcclusion.value = 0.95f
@@ -236,7 +247,7 @@ object MaterialLibrary {
         materials[Kind.GROUND_SURFACE] = Material("ground-surface").apply {
             // Dark stone table matched to the backdrop's bottom stop, with a soft sheen so the
             // key light leaves a believable reflection.
-            ColorPacking.toLinearRgb(0xFF2A1F19.toInt(), albedo, gain = 1.1f)
+            ColorPacking.toLinearRgb(0xFF33261D.toInt(), albedo, gain = 1.3f)
             roughness.value = 0.62f
             metallic.value = 0.08f
             reflectance.value = 0.09f
@@ -255,7 +266,11 @@ object MaterialLibrary {
  * material object is rebuilt.
  */
 fun Material.applyVinylStyle(style: VinylStyle) {
-    ColorPacking.toLinearRgb(style.recordAlbedo, albedo, gain = 1.25f)
+    // Gain is high on purpose: a record is a black dielectric, so its colour barely contributes --
+    // what sells it is the specular response sweeping across the grooves. Lifting the albedo out of
+    // pure black gives the groove term something to modulate, and the reflectance below gives the
+    // highlight enough energy to read as vinyl rather than as a hole in the scene.
+    ColorPacking.toLinearRgb(style.recordAlbedo, albedo, gain = 2.6f)
     // A touch of the label accent bleeds into the vinyl, as it does on tinted pressings.
     val accentBleed = 0.05f * style.accentStrength
     val accent = floatArrayOf(0f, 0f, 0f)
@@ -269,11 +284,11 @@ fun Material.applyVinylStyle(style: VinylStyle) {
     specularTint[2] = 1f
     roughness.value = style.recordRoughness
     metallic.value = 0.0f
-    reflectance.value = 0.065f
+    reflectance.value = 0.10f
     // Polished pressings carry a clearcoat: that tight second highlight is what makes a
     // black record read as glossy rather than merely dark.
     clearcoat.value = 0.62f
-    fresnelBoost.value = 0.18f
+    fresnelBoost.value = 0.22f
     opacity.value = style.recordOpacity
     ambientOcclusion.value = 0.92f
     grooveMode.value = true
