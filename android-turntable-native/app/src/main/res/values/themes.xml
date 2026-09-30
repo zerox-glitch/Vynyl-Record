@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose owns all in-app styling; this theme only paints the window before the
+         first frame so there is no white flash on cold start. -->
+    <style name="Theme.VynylTurntable" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/vynyl_background</item>
+        <item name="android:statusBarColor">@color/vynyl_background</item>
+        <item name="android:navigationBarColor">@color/vynyl_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorBackground">@color/vynyl_background</item>
+    </style>
+</resources>

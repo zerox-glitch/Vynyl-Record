@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vynyl native turntable module.
+
+  Deliberately absent: android.permission.INTERNET. Nothing in this app opens a socket,
+  so the demo works identically in airplane mode.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- OpenGL ES 3.0 is requested but not required: devices without it fall back to the
+         static Compose surface (see com.vynylrecord.turntable.ui.StaticTurntableFallback). -->
+    <uses-feature
+        android:name="android.hardware.opengles.version"
+        android:required="false"
+        android:version="3.0" />
+
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VynylTurntable">
+
+        <!-- No android:configChanges: rotation recreates the activity on purpose so the
+             renderer/surface/controller teardown path is exercised on every rotation. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.VynylTurntable">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

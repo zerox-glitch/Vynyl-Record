@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+local.properties
+*.hprof
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystores (this project never ships signing material)
+*.jks
+*.keystore
+
+# OS noise
+.DS_Store

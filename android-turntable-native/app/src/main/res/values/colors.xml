@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Analog studio palette shared with the Compose theme and the GL clear colour. -->
+    <color name="vynyl_background">#0C0A09</color>
+    <color name="vynyl_panel">#1C1917</color>
+    <color name="vynyl_amber">#D97706</color>
+    <color name="vynyl_amber_bright">#F59E0B</color>
+    <color name="vynyl_cream">#FEF3C7</color>
+    <color name="vynyl_brass">#B45309</color>
+    <color name="vynyl_ruby">#991B1B</color>
+    <color name="ic_launcher_background">#1C1917</color>
+</resources>
