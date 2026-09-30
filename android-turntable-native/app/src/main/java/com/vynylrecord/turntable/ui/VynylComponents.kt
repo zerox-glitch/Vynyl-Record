@@ -56,6 +56,20 @@ enum class VynylIcon {
     GAUGE,
     DISC,
     SUN,
+    // ---- the shell
+    MIC,
+    STOP,
+    IMPORT,
+    FLASK,
+    VAULT,
+    GEAR,
+    CLOSE,
+    CHEVRON_RIGHT,
+    CHEVRON_LEFT,
+    CHECK,
+    TRASH,
+    PENCIL,
+    NOTE,
 }
 
 /** Draws [icon] centred in the current layout bounds. */
@@ -79,8 +93,329 @@ fun VynylIconGlyph(
             VynylIcon.GAUGE -> drawGauge(tint, stroke)
             VynylIcon.DISC -> drawDisc(tint, stroke)
             VynylIcon.SUN -> drawSun(tint, stroke)
+            VynylIcon.MIC -> drawMic(tint, stroke)
+            VynylIcon.STOP -> drawStop(tint)
+            VynylIcon.IMPORT -> drawImport(tint, stroke)
+            VynylIcon.FLASK -> drawFlask(tint, stroke)
+            VynylIcon.VAULT -> drawVault(tint, stroke)
+            VynylIcon.GEAR -> drawGear(tint, stroke)
+            VynylIcon.CLOSE -> drawClose(tint, stroke)
+            VynylIcon.CHEVRON_RIGHT -> drawChevron(tint, stroke, right = true)
+            VynylIcon.CHEVRON_LEFT -> drawChevron(tint, stroke, right = false)
+            VynylIcon.CHECK -> drawCheck(tint, stroke)
+            VynylIcon.TRASH -> drawTrash(tint, stroke)
+            VynylIcon.PENCIL -> drawPencil(tint, stroke)
+            VynylIcon.NOTE -> drawNote(tint, stroke)
         }
     }
+}
+
+/** A microphone capsule on a stand: the Studio tab and the record button. */
+private fun DrawScope.drawMic(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.20f
+    val c = center
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(c.x - r * 0.62f, c.y - r * 1.55f),
+        size = Size(r * 1.24f, r * 2.1f),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(r * 0.62f, r * 0.62f),
+        style = Stroke(width = stroke),
+    )
+    drawArc(
+        color = tint,
+        startAngle = 0f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(c.x - r * 1.15f, c.y - r * 0.35f),
+        size = Size(r * 2.3f, r * 1.7f),
+        style = Stroke(width = stroke, cap = StrokeCap.Round),
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x, c.y + r * 1.35f),
+        end = Offset(c.x, c.y + r * 2.1f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+private fun DrawScope.drawStop(tint: Color) {
+    val r = size.minDimension * 0.28f
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(center.x - r, center.y - r),
+        size = Size(r * 2f, r * 2f),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(r * 0.3f, r * 0.3f),
+    )
+}
+
+private fun DrawScope.drawImport(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.34f
+    val c = center
+    drawLine(
+        color = tint,
+        start = Offset(c.x, c.y - r),
+        end = Offset(c.x, c.y + r * 0.45f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.5f, c.y + r * 0.02f),
+        end = Offset(c.x, c.y + r * 0.5f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x + r * 0.5f, c.y + r * 0.02f),
+        end = Offset(c.x, c.y + r * 0.5f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r, c.y + r),
+        end = Offset(c.x + r, c.y + r),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+/** An Erlenmeyer flask: the Sound Lab tab. */
+private fun DrawScope.drawFlask(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.32f
+    val c = center
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.30f, c.y - r),
+        end = Offset(c.x - r * 0.30f, c.y - r * 0.25f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x + r * 0.30f, c.y - r),
+        end = Offset(c.x + r * 0.30f, c.y - r * 0.25f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.30f, c.y - r * 0.25f),
+        end = Offset(c.x - r * 0.95f, c.y + r * 0.85f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x + r * 0.30f, c.y - r * 0.25f),
+        end = Offset(c.x + r * 0.95f, c.y + r * 0.85f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.95f, c.y + r * 0.85f),
+        end = Offset(c.x + r * 0.95f, c.y + r * 0.85f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+/** A lidded archive box: the Vault tab. */
+private fun DrawScope.drawVault(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.33f
+    val c = center
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(c.x - r, c.y - r * 0.45f),
+        size = Size(r * 2f, r * 1.5f),
+        style = Stroke(width = stroke),
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r, c.y - r * 0.45f),
+        end = Offset(c.x + r, c.y - r * 0.45f),
+        strokeWidth = stroke * 1.4f,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.25f, c.y + r * 0.25f),
+        end = Offset(c.x + r * 0.25f, c.y + r * 0.25f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+private fun DrawScope.drawGear(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.30f
+    drawCircle(color = tint, radius = r, center = center, style = Stroke(width = stroke))
+    drawCircle(color = tint, radius = r * 0.42f, center = center, style = Stroke(width = stroke))
+    for (index in 0 until 8) {
+        val angle = Math.toRadians(index * 45.0)
+        drawLine(
+            color = tint,
+            start = Offset(
+                center.x + (kotlin.math.cos(angle) * r * 1.05f).toFloat(),
+                center.y + (kotlin.math.sin(angle) * r * 1.05f).toFloat(),
+            ),
+            end = Offset(
+                center.x + (kotlin.math.cos(angle) * r * 1.48f).toFloat(),
+                center.y + (kotlin.math.sin(angle) * r * 1.48f).toFloat(),
+            ),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+private fun DrawScope.drawClose(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.30f
+    drawLine(
+        color = tint,
+        start = Offset(center.x - r, center.y - r),
+        end = Offset(center.x + r, center.y + r),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(center.x + r, center.y - r),
+        end = Offset(center.x - r, center.y + r),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+private fun DrawScope.drawChevron(tint: Color, stroke: Float, right: Boolean) {
+    val r = size.minDimension * 0.26f
+    val sign = if (right) 1f else -1f
+    drawLine(
+        color = tint,
+        start = Offset(center.x - sign * r * 0.35f, center.y - r),
+        end = Offset(center.x + sign * r * 0.45f, center.y),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(center.x + sign * r * 0.45f, center.y),
+        end = Offset(center.x - sign * r * 0.35f, center.y + r),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+private fun DrawScope.drawCheck(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.32f
+    drawLine(
+        color = tint,
+        start = Offset(center.x - r * 0.85f, center.y + r * 0.05f),
+        end = Offset(center.x - r * 0.18f, center.y + r * 0.72f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(center.x - r * 0.18f, center.y + r * 0.72f),
+        end = Offset(center.x + r * 0.9f, center.y - r * 0.7f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+private fun DrawScope.drawTrash(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.30f
+    val c = center
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r, c.y - r * 0.6f),
+        end = Offset(c.x + r, c.y - r * 0.6f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.45f, c.y - r * 0.6f),
+        end = Offset(c.x - r * 0.45f, c.y - r * 1.05f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x + r * 0.45f, c.y - r * 0.6f),
+        end = Offset(c.x + r * 0.45f, c.y - r * 1.05f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.45f, c.y - r * 1.05f),
+        end = Offset(c.x + r * 0.45f, c.y - r * 1.05f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(c.x - r * 0.75f, c.y - r * 0.6f),
+        size = Size(r * 1.5f, r * 1.7f),
+        style = Stroke(width = stroke),
+    )
+}
+
+private fun DrawScope.drawPencil(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.32f
+    drawLine(
+        color = tint,
+        start = Offset(center.x - r * 0.7f, center.y + r * 0.9f),
+        end = Offset(center.x + r * 0.85f, center.y - r * 0.65f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(center.x + r * 0.45f, center.y - r * 1.0f),
+        end = Offset(center.x + r * 1.0f, center.y - r * 0.45f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(center.x - r * 0.7f, center.y + r * 0.9f),
+        end = Offset(center.x - r * 1.05f, center.y + r * 1.05f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+}
+
+/** A slanted note: the label on a pressing with no artwork of its own. */
+private fun DrawScope.drawNote(tint: Color, stroke: Float) {
+    val r = size.minDimension * 0.28f
+    val c = center
+    drawLine(
+        color = tint,
+        start = Offset(c.x + r * 0.75f, c.y - r * 1.1f),
+        end = Offset(c.x + r * 0.75f, c.y + r * 0.55f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.85f, c.y - r * 0.6f),
+        end = Offset(c.x - r * 0.85f, c.y + r * 1.0f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = tint,
+        start = Offset(c.x - r * 0.85f, c.y - r * 0.6f),
+        end = Offset(c.x + r * 0.75f, c.y - r * 1.1f),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    drawCircle(color = tint, radius = r * 0.44f, center = Offset(c.x - r * 1.05f, c.y + r * 1.05f))
+    drawCircle(color = tint, radius = r * 0.44f, center = Offset(c.x + r * 0.55f, c.y + r * 0.62f))
 }
 
 private fun DrawScope.drawTrianglePlayed(tint: Color) {

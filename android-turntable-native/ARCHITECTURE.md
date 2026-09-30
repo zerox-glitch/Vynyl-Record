@@ -278,3 +278,96 @@ The scene is decorative and labelled as such. Everything is operable without it:
 | Styles | `VinylStyle` | more pressings |
 
 `INTEGRATION.md` covers how to use these from a host app.
+
+---
+
+## 11. The application layer
+
+Three packages sit above the deck, and none of them knows about OpenGL.
+
+| Package | Owns | Depends on |
+|---|---|---|
+| `press/` | `PcmAudio`, WAV read/write, and `VinylPresser` — the whole DSP chain | nothing but Kotlin |
+| `vault/` | `Press` (one side's record), `PressRecipe` (its character), `PressStore` (the directory) | `model/` |
+| `studio/` | `VoiceRecorder`, `AudioDecoder`, `StudioViewModel`, `StudioUiState` | `press/`, `vault/`, Android audio APIs |
+
+The split is deliberate: `press/` and `vault/` have **no Android dependency at all**, so the part of
+the app that destroys audio if it is wrong runs in plain JVM unit tests. Only `studio/` and `ui/`
+need a device.
+
+### Where the two view models meet
+
+```
+   StudioViewModel ──► presses a side ──► Vault ──► VynylAppRoot ──► TurntableController.load(file)
+        │                                                 │
+        └── owns the draft (label, style, speed, recipe)   └── deck flips to the sibling side's file
+```
+
+`VynylAppRoot` is the only place the Studio and the deck meet, and they meet in two directions: a
+pressed side goes onto the platter, and flipping a two-sided record loads the other side's file rather
+than merely reprinting the label. Neither view model holds a reference to the other.
+
+### Memory
+
+A side is tens of megabytes of float PCM, so the shapes of these buffers are an architectural
+decision, not an optimisation:
+
+* `PcmAudio` carries a `frameCount` that may be **shorter than its array**. The trim stage shifts the
+  audio down inside the buffer the caller already owns and hands back a shorter view, instead of
+  allocating a copy. Every stage that walks a raw array is told how many frames are live — otherwise
+  the left-behind tail gets pressed into the record.
+* `VinylPresser.press` **consumes its input**. One buffer goes in, one comes out; only the wow-and-
+  flutter resampler allocates, because a time-varying resample cannot be done in place.
+* A master longer than three minutes is split into sides, and each side is pressed and written before
+  the next is copied, so peak memory is one side plus the master rather than the whole side count.
+* The decoder sizes its buffer from the container's declared duration and grows by doubling only if
+  the container lied, so a 40-second voice note does not reserve ten minutes of float PCM.
+
+### Failure rules
+
+The app is expected to meet damaged data, and the rules are the same everywhere:
+
+* A vault record that cannot be read is **skipped**, not fatal — the vault opens with the records it
+  can read.
+* A description that names a file outside its own directory is refused: a `.properties` file is data,
+  and data does not get to point the app at another file.
+* A press that fails to write leaves no half-record: the audio is written first and the description
+  last, and the description is renamed into place.
+* An import that cannot be decoded reports "that file could not be read on this device" rather than
+  crashing the Studio.
+
+## 12. The press chain
+
+`VinylPresser` is a fixed sequence of stages, each of which either mutates the buffer in place or
+returns a new one it owns. The order is the design:
+
+| # | Stage | Why there |
+|---|---|---|
+| 1 | trim silence, lead-in ramp | everything downstream works on the side that will actually be cut |
+| 2 | normalise | the character stages are level-dependent, so the level is set first |
+| 3 | warmth, cutter drive | tone and saturation before the mechanical stages, as a lathe would |
+| 4 | wow & flutter | a time-varying resample, so the whole side has to be in hand |
+| 5 | groove noise, hiss, crackle | surface sits *on* the music; it is not compressed with it |
+| 6 | room tone | the space the record was played in, after the surface |
+| 7 | rumble filter, soft ceiling, run-out | DC and sub-25 Hz removed, peaks bent not scaled, tail faded |
+
+Two properties are asserted rather than assumed (see `VinylPresserTest`):
+
+* **determinism** — the noise stages are seeded, so the same recipe on the same master produces the
+  same samples. Without it, a pressing could not be tested at all;
+* **level** — the final stage shapes only the samples above −1 dBFS. Scaling the whole side down to
+  fit a transient is what makes a crackled pressing quieter and duller than a clean one, which is
+  exactly backwards: the character should add, not subtract.
+
+## 13. Capture and import
+
+Both paths end in a 44.1 kHz `PcmAudio` in the studio's format, and both are local.
+
+* **Capture** uses `AudioRecord`, not `MediaRecorder`: raw PCM means a live level meter, no decode
+  step in the press chain, and no loss. The WAV header is written with placeholder lengths and patched
+  on stop, so an hour-long note is never held in memory and an interrupted capture is still a valid
+  file up to the last flushed frame. Clean-up effects (`NoiseSuppressor`, `AutomaticGainControl`,
+  `AcousticEchoCanceler`) are attached where the device offers them, and released with the session.
+* **Import** goes through `ACTION_OPEN_DOCUMENT`, copies the chosen file into the cache, and decodes it
+  with `MediaExtractor` + `MediaCodec`, folding anything above two channels. WAV files skip the codec
+  entirely — they are already PCM, and a decoder would only add a generation of rounding.

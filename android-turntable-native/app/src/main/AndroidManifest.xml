@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Vynyl native turntable module.
+  Vynyl - Digital Wax Studio, native.
 
-  Deliberately absent: android.permission.INTERNET. Nothing in this app opens a socket,
-  so the demo works identically in airplane mode.
+  Deliberately absent: android.permission.INTERNET. Nothing in this app opens a socket: recordings
+  are captured from the microphone, imports come from the system file picker, and every sound,
+  shader and texture is either generated on the device or bundled in the APK. The whole app works
+  identically in airplane mode.
+
+  The only permission requested is RECORD_AUDIO, and only so a voice can be engraved. It is asked
+  for at the moment the record button is pressed, never at launch.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- OpenGL ES 3.0 is requested but not required: devices without it fall back to the
          static Compose surface (see com.vynylrecord.turntable.ui.StaticTurntableFallback). -->
@@ -16,6 +23,12 @@
 
     <uses-feature
         android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <!-- The microphone is used for capture; the app is still fully usable without one because a
+         recording can be imported instead. -->
+    <uses-feature
+        android:name="android.hardware.microphone"
         android:required="false" />
 
     <application

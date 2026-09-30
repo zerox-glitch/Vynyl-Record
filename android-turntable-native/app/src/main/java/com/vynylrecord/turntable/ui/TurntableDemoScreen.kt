@@ -81,6 +81,15 @@ fun TurntableDemoScreen(
     modifier: Modifier = Modifier,
     onPlaybackCompleted: () -> Unit = {},
     onError: (String) -> Unit = {},
+    /**
+     * Called instead of the label-only flip when the loaded pressing actually has a second side.
+     *
+     * A two-sided record that reprints its label without changing the audio would be a lie, so the
+     * app takes this hook whenever it can load the sibling side's file.
+     */
+    onFlipSide: (() -> Unit)? = null,
+    /** Extra content under the transport: the app puts its now-playing strip here. */
+    footer: (@Composable () -> Unit)? = null,
 ) {
     var fullScreen by rememberSaveable { mutableStateOf(false) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
@@ -163,7 +172,12 @@ fun TurntableDemoScreen(
                 compact = fullScreen,
                 showOptions = showOptions,
                 onToggleOptions = { showOptions = !showOptions },
+                onFlipSide = onFlipSide,
             )
+
+            if (!fullScreen && footer != null) {
+                footer()
+            }
         }
     }
 }
@@ -205,6 +219,7 @@ private fun TransportPanel(
     compact: Boolean,
     showOptions: Boolean,
     onToggleOptions: () -> Unit,
+    onFlipSide: (() -> Unit)?,
 ) {
     BrassPanel(
         modifier = Modifier
@@ -306,8 +321,8 @@ private fun TransportPanel(
                 VynylChoiceChip(
                     label = "Side ${uiState.metadata.side.shortName}",
                     selected = false,
-                    onClick = { controller.flipSide() },
-                    supporting = "Flip label",
+                    onClick = { if (onFlipSide != null) onFlipSide() else controller.flipSide() },
+                    supporting = if (onFlipSide != null) "Flip side" else "Flip label",
                 )
                 VynylChoiceChip(
                     label = if (uiState.isCompleted) "Replay" else "Restart",

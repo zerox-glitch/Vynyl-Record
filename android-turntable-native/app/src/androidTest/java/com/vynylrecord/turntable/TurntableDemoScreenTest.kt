@@ -11,7 +11,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.Lifecycle
 import com.vynylrecord.turntable.model.VinylStyle
+import com.vynylrecord.turntable.ui.AppTab
 import com.vynylrecord.turntable.ui.DemoTestTags
+import com.vynylrecord.turntable.ui.ShellTestTags
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -21,17 +23,29 @@ import org.junit.Test
  *
  * These tests stay on the Compose side on purpose: the same assertions pass whether the 3D surface
  * or the static fallback is drawing, which is exactly the accessibility guarantee the module makes.
+ *
+ * The app opens on the Studio, so every test here walks to the deck first — through the same tab a
+ * person taps, which means the shell's navigation is exercised on every run rather than in one test.
  */
 class TurntableDemoScreenTest {
 
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
+    /** Taps the 3D Deck tab and waits for the deck to have a record on it. */
     private fun waitForRecord() {
+        waitForShell()
+        rule.onNodeWithTag(ShellTestTags.tab(AppTab.DECK)).performClick()
         rule.waitUntil(timeoutMillis = 10_000) {
             rule.onAllNodesWithTagCount(DemoTestTags.SEEK) > 0
         }
         rule.waitForIdle()
+    }
+
+    private fun waitForShell() {
+        rule.waitUntil(timeoutMillis = 10_000) {
+            rule.onAllNodesWithTagCount(ShellTestTags.BOTTOM_BAR) > 0
+        }
     }
 
     private fun onAllNodesWithTagCount(tag: String): Int =

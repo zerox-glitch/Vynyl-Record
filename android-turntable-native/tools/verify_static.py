@@ -214,6 +214,8 @@ ALLOWED_URL_CONTEXTS = (
     "://www.gnu.org",
 )
 FORBIDDEN_PERMISSIONS = ("INTERNET", "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE", "BILLING")
+# The complete set the app is allowed to hold. Capture needs the microphone; nothing else does.
+ALLOWED_PERMISSIONS = ["RECORD_AUDIO"]
 FORBIDDEN_SDKS = (
     "com.google.firebase",
     "com.google.android.gms.ads",
@@ -280,10 +282,33 @@ def check_offline(root: str) -> None:
     for permission in FORBIDDEN_PERMISSIONS:
         if re.search(rf'android\.permission\.{permission}\b', text):
             fail(f"manifest requests forbidden permission: {permission}")
-    if "uses-permission" not in text:
+
+    # The only permission the app may hold is the microphone, and only for capture. Anything else --
+    # a new permission added in a refactor, a dependency's manifest merge -- has to fail here rather
+    # than silently widen what the app can reach.
+    declared = sorted(set(re.findall(r'android\.permission\.(\w+)', text)))
+    if declared == ALLOWED_PERMISSIONS:
+        ok("the only permission the app holds is the microphone: " + ", ".join(declared))
+    elif not declared:
         ok("manifest declares no permissions at all")
     else:
-        ok("manifest permission set is clean")
+        fail(f"unexpected permissions in the manifest: {', '.join(sorted(set(declared) - set(ALLOWED_PERMISSIONS)))}")
+
+    # No networking code path, in any form, anywhere in the sources.
+    network_apis = (
+        "java.net.", "HttpURLConnection", "okhttp", "URLConnection", "Socket(",
+        "WebView", "loadUrl", "URL(", "InetAddress",
+    )
+    offenders = []
+    for path in glob.glob(os.path.join(root, "app", "src", "**", "*.kt"), recursive=True):
+        body = strip_comments(open(path).read())
+        for api in network_apis:
+            if api in body:
+                offenders.append(f"{os.path.relpath(path, root)}: {api}")
+    if offenders:
+        fail("network APIs found: " + "; ".join(offenders[:4]))
+    else:
+        ok("no networking APIs anywhere in the Kotlin sources")
 
     # Bundled audio must be local and referenced by name only.
     audio_dir = os.path.join(root, "app", "src", "main", "assets", "audio")

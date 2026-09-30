@@ -9,6 +9,17 @@ URL to hand to a code assistant is
 
 ---
 
+## 0. Two ways to use this module
+
+* **As the whole app.** `MainActivity` hosts `VynylAppRoot(player, studio)`, which is the five-section
+  shell: Studio, 3D Deck, Sound Lab, Vault, Settings. Copy the project and it is a finished app.
+* **As a deck inside another app.** Copy `graphics/`, `model/`, `audio/` and `player/`, build a
+  `TurntableController` with your own `PlaybackBackend`, and host `VynylTurntable` (or
+  `TurntableDemoScreen`) in your own Compose tree. The deck has no dependency on the Studio, the vault
+  or the press chain — the arrow only ever points one way: `StudioViewModel → TurntableController`.
+
+The table below lists what to copy for the full app; §1 lists the minimum for the deck alone.
+
 ## 1. Copy these packages
 
 Namespace used here: `com.vynylrecord.turntable`. If you keep a different application ID, rename the
@@ -108,6 +119,25 @@ setContent {
 
 If you host it yourself instead, remember three things: bind with `controller.attachRenderer(renderer)`,
 detach on teardown, and call `TurntableSurface.pauseRendering()` when the view stops being visible.
+
+## 4b. The Studio, the press chain and the vault
+
+If you are taking the whole app, add these packages and wire them exactly as `VynylAppRoot` does:
+
+| Package | What it needs from the host |
+|---|---|
+| `press/` | nothing — pure Kotlin; `VinylPresser.press(audio, recipe) { fraction, stage -> … }` |
+| `vault/` | a directory; `PressStore(File(filesDir, "presses"))`. `Press` owns its folder, so a record is one directory |
+| `studio/` | `RECORD_AUDIO` for capture (request it at the record button, not at launch); `VynylAppRoot` shows the pattern with `rememberLauncherForActivityResult` |
+| `studio/AudioDecoder` | a `Context` for `MediaExtractor`/`MediaCodec`; WAV files bypass the codec |
+
+The two integration rules that matter:
+
+1. **`StudioViewModel.press()` is asynchronous and states its progress.** Do not run it on the main
+   thread — a three-minute side takes seconds — and do not assume it produces one file: a master
+   longer than three minutes is cut across several sides, each its own vault record.
+2. **A pressed side is a plain WAV.** If your app wants to export, share or back it up, that is the
+   file; nothing else needs to travel with it.
 
 ## 5. Loading audio
 

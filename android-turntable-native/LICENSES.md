@@ -73,6 +73,17 @@ the app you do not.
 | Label artwork, deck geometry, studio environment | Generated at runtime from code (Canvas + procedural meshes + shaders). | Original to this repository. |
 | Typography | The platform's `Typeface.SERIF` / `SANS_SERIF` families. No font files are bundled or redistributed. | Device-provided |
 
+## 5b. The press chain and the vault
+
+The DSP in `press/VinylPresser.kt` — the filters, the noise and crackle generators, the wow-and-flutter
+resampler, the Schroeder reverb and the soft ceiling — was written for this repository. It uses no
+third-party DSP library, no impulse responses and no samples: the crackle is a seeded Poisson process,
+the surface is filtered white noise, and the room is four comb filters and two all-passes. Nothing is
+fetched at runtime and nothing is bundled beyond the source.
+
+A pressing produced by this app is the user's own audio, transformed on their device. The app makes no
+claim over it, and there is nowhere for it to go: the export is a WAV in app-private storage.
+
 ## 6. What is deliberately *not* here
 
 * No HDRI or environment map (the studio is a shader).

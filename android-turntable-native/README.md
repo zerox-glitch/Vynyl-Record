@@ -1,13 +1,25 @@
-# Vynyl — native Android turntable (reference implementation)
+# Vynyl — Digital Wax Studio (native Android app)
 
-A standalone Android Studio project that renders a **photoreal-enough record player in real time with
-a hand-written OpenGL ES 3.0 renderer**, plays local audio through Media3, and drives the whole
-mechanism — record drop, platter spin-up, tonearm travel, stylus cueing, groove tracking, needle
-lift, arm return — from one frame-rate-independent state machine.
+A complete, standalone Android app that **engraves a voice into a record**: capture a voice or import
+a recording, dedicate it on a printed label, choose how it should sound and look, then *press* it —
+the press chain runs locally and writes a real, playable WAV into the vault. The side then plays on a
+**photoreal-enough record player rendered in real time with a hand-written OpenGL ES 3.0 renderer**,
+with the whole mechanism — record drop, platter spin-up, tonearm travel, stylus cueing, groove
+tracking, needle lift, arm return — driven by one frame-rate-independent state machine.
 
-It exists so the Vynyl app can have a *native 3D deck* instead of a spinning image. Everything is
-procedural, bundled and offline: **no GLB models, no downloaded HDRI, no remote textures, no audio
-streaming, no `INTERNET` permission**. The demo works in airplane mode the moment it is installed.
+Everything is procedural, bundled and offline: **no GLB models, no downloaded HDRI, no remote
+textures, no audio streaming, no cloud, no accounts, no `INTERNET` permission**. The app works in
+airplane mode the moment it is installed.
+
+**Five sections**
+
+| Section | What it does |
+|---|---|
+| **Studio** | Capture → Dedicate → Recipe → Atmosphere, then press. Records the microphone to a 44.1 kHz WAV (or imports any audio the device can decode), prints the label, and cuts the side. |
+| **3D Deck** | The turntable: the pressed side on the platter, transport, seeking, vinyl styles, camera presets, render quality, and a real flip to the other side of a two-sided pressing. |
+| **Sound Lab** | The same press chain with the knobs laid out: crackle, groove noise, hiss, wow & flutter, room tone, warmth, cutter drive, mastering switches. |
+| **Vault** | Every pressed side, newest first, self-contained on disk — play it on the deck, reprint its label, or delete it. |
+| **Settings** | Quality ladder, camera, motion, storage, and what this build never does. |
 
 ```
 android-turntable-native/
@@ -22,8 +34,11 @@ android-turntable-native/
 │   ├── graphics/animation/          the mechanism state machine
 │   ├── graphics/                    renderer, scene, camera, environment, capabilities
 │   ├── audio/                       Media3 transport (local files only)
-│   ├── player/                      TurntableController — the public API
-│   └── ui/                          Compose: VynylTurntable, demo screen, static fallback
+│   ├── press/                       WAV I/O + the vinyl press chain (pure Kotlin, JVM-testable)
+│   ├── vault/                       the press records and the on-disk vault
+│   ├── studio/                      capture, import/decode, and the Studio's view model
+│   ├── player/                      TurntableController — the deck's public API
+│   └── ui/                          Compose: the app shell, five screens, VynylTurntable, fallback
 ├── app/src/test/                    JVM unit tests (no device required)
 └── app/src/androidTest/             device tests (Compose UI, lifecycle, fallback)
 ```
@@ -155,15 +170,47 @@ play() ─▶ animator PLATTER_STARTING ─▶ TONEARM_MOVING ─▶ NEEDLE_LOWE
 | Media3 | 1.5.1 (ExoPlayer, local playback only) |
 | OpenGL ES | 3.0 for the 3D path; anything older falls back to the Compose surface |
 
+## 4b. How a side is pressed
+
+The character is **baked into the file**, never applied during playback. A side pressed here sounds
+the same in this app, in a file manager, or on a laptop years from now, because what lands in the
+vault is an ordinary 16-bit WAV.
+
+```
+   capture (AudioRecord, streaming to disk)
+        │                                   or
+   import  (system picker ▶ MediaCodec ▶ resample in Kotlin)
+        ▼
+   trim silence ─▶ lead-in ramp ─▶ normalise ─▶ warmth ─▶ cutter drive ─▶ wow & flutter
+        ─▶ groove noise + hiss ─▶ crackle ─▶ room tone ─▶ rumble filter ─▶ soft ceiling ─▶ run-out
+        ▼
+   vault/<id>/side-xxxxxx.wav  +  press.properties
+```
+
+* **Deterministic.** The noise stages are seeded, so the same recipe on the same master presses the
+  same record. That is what makes the chain testable: `VinylPresserTest` asserts the trim length, the
+  silent head and tail, the noise floor, the pitch drift and the level ceiling on real samples.
+* **Level-safe.** The final stage bends only the peaks that exceed −1 dBFS. Scaling the whole side to
+  fit a random pop is what makes a heavily crackled record quieter and duller than a clean one — the
+  pops would end up setting the gain for the music.
+* **Sides, not files.** Anything longer than three minutes is cut across more than one side (Side A,
+  Side B), each pressed and written in turn, which also keeps peak memory to one side plus the master.
+* **Memory-shaped.** A three-minute side is ~32 MB of float PCM, so the chain mutates one buffer
+  instead of copying at every stage; only the time-varying resampler allocates.
+
 ## 5. Offline guarantee
 
-* `AndroidManifest.xml` declares **no permissions at all** — not even `INTERNET`.
+* `AndroidManifest.xml` declares **exactly one permission: `RECORD_AUDIO`**, and it is requested at
+  the moment the record button is pressed, never at launch. There is **no `INTERNET`** permission, so
+  the app cannot open a connection even if a future change tried to.
+* Imports go through the system file picker (`ACTION_OPEN_DOCUMENT`), which needs no permission at
+  all, and the chosen file is decoded on the device with `MediaCodec` and resampled in plain Kotlin.
 * The shaders are GLSL source files in `assets/`; the audio is a generated MP3 in `assets/`; the
   label is drawn at runtime with the Android canvas; the environment is arithmetic.
 * No analytics, ads, telemetry, crash reporting or remote logging. Nothing to configure, nothing to
   sign up for.
-* `tools/verify_static.py` (see §8) fails the build pipeline if a remote URL or a networking
-  dependency sneaks in.
+* `tools/verify_static.py` (see §8) fails the build pipeline if a remote URL, a networking API, a
+  forbidden dependency, or any permission other than the microphone appears anywhere in the project.
 
 ## 6. GPU and device limits — read this before promising a device a good time
 
@@ -199,7 +246,11 @@ play() ─▶ animator PLATTER_STARTING ─▶ TONEARM_MOVING ─▶ NEEDLE_LOWE
 ```
 
 The JVM suite covers the parts that are pure maths and state (`model/`, `graphics/animation/`,
-`graphics/CameraRig`, `graphics/material/`, `player/TurntableController`) and needs no emulator.
+`graphics/CameraRig`, `graphics/material/`, `player/TurntableController`) and needs no emulator. The
+round-2 packages were written to be testable without a device on purpose: `press/` and `vault/` have
+no Android dependency at all, so the WAV codec, the press chain, the recipes and the vault rules run
+as plain JUnit tests — including the cases that only matter when something is wrong (a truncated
+file, a damaged record, a record from a newer version).
 
 **Static verification in this repository** — `tools/verify_static.py` runs without any Android
 tooling; its only requirement is `tree_sitter` plus the Kotlin/GLSL/XML grammars
@@ -209,18 +260,31 @@ tooling; its only requirement is `tree_sitter` plus the Kotlin/GLSL/XML grammars
 python3 tools/verify_static.py
 ```
 
-It parses every Kotlin and GLSL file, checks the XML, asserts the offline contract (no remote URLs,
-no networking dependencies, no permissions), cross-checks that every uniform declared in a shader is
+It parses every Kotlin and GLSL file (83 Kotlin, 5 GLSL), checks the XML, asserts the offline contract
+(no remote URLs, **no networking APIs anywhere in the sources**, no networking dependencies, and no
+permission other than `RECORD_AUDIO`), cross-checks that every uniform declared in a shader is
 uploaded by the renderer and vice versa, and confirms the ES 3.0 manifest contract and asset set.
 
-> **Honest status:** the sources in this folder were written and *statically* verified — every
-> Kotlin file parses, every shader parses in both `precision` variants, all 64 shader uniforms match
-> the renderer's uploads, and the offline/permission contract holds. The Android build itself
-> (`assembleDebug`, `test`, `lint`, `connectedAndroidTest`) was **not** executed in the environment
-> this module was authored in, because it had no JDK, no Android SDK and no access to Maven
-> repositories. Run `./gradlew assembleDebug && ./gradlew test` on a machine with the SDK before
-> treating it as green. Nothing here is a mockup: the renderer is a complete implementation, not a
-> placeholder surface.
+> **Honest status:** the sources in this folder were written and *statically* verified — every Kotlin
+> file parses, every shader parses in both `precision` variants, all 64 shader uniforms match the
+> renderer's uploads, and the offline/permission contract holds. Three further passes were run over
+> the sources with the Kotlin grammar: every call to a function declared in this project was checked
+> for argument names and required arguments (767 functions, 53 data classes, including every
+> `copy(named = ...)`), every `com.vynylrecord.*` import was checked to name a real declaration, and
+> every `R.*` reference was checked against the resources. All four passes are clean.
+>
+> The press chain's behaviour was additionally checked numerically against a line-by-line port of the
+> same DSP: trim length, lead-in and run-out silence, determinism per seed, noise floor between words,
+> pitch drift, channel handling, the short and empty cases, and the level ceiling. That port found one
+> real defect before the tests were even run — a heavy crackle recipe used to make a side *quieter*
+> than a clean one, because the whole side was scaled down to fit a pop. The final stage now bends
+> only the peaks above −1 dBFS (`softCeiling`), and the port reports 0 failed checks.
+>
+> The Android build itself (`assembleDebug`, `test`, `lint`, `connectedAndroidTest`) was **not**
+> executed in the environment this module was authored in, because it had no JDK, no Android SDK and
+> no access to Maven repositories. Run `./gradlew assembleDebug && ./gradlew test` on a machine with
+> the SDK before treating it as green. Nothing here is a mockup: the renderer, the press chain, the
+> recorder and the vault are complete implementations, not placeholder surfaces.
 
 ## 9. Where to go next
 
