@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vynyl Record — the whole app runs on the device.
+
+  Four permissions, each explained here rather than assumed:
+
+    * RECORD_AUDIO               asked for the first time the record button is pressed, never at launch.
+    * POST_NOTIFICATIONS         Android 13+ only, asked the first time a render starts, because that
+                                 render shows its progress in a notification the user can watch or
+                                 cancel. Refusing it costs nothing but the notification: the press
+                                 still runs.
+    * FOREGROUND_SERVICE         a press takes minutes. Running it as a foreground worker is what keeps
+    * FOREGROUND_SERVICE_DATA_SYNC Android from killing it while the user browses the Vault or locks the
+                                 phone, and what makes the progress notification honest. The service
+                                 type is `dataSync`, the narrowest category that fits "writing a file
+                                 the user asked for"; it is not `mediaPlayback` or `microphone`, because
+                                 a press neither plays audio nor records it.
+
+  None of these is a network or storage permission.
+
+  There is deliberately no INTERNET permission. That is what makes "works in airplane mode" a fact
+  about this manifest rather than a promise — without it, the platform refuses every socket the app
+  could ever try to open.
+
+  Import and export go through the Storage Access Framework (ACTION_OPEN_DOCUMENT /
+  ACTION_CREATE_DOCUMENT), which grants per-file access without any storage permission at all, and
+  exported files leave through FileProvider + the Android Sharesheet.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- A microphone is used, but the app installs and runs on a device without one: capture is
+         disabled and everything else (import, render, library, player, export) still works. -->
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
+    <!-- OpenGL ES 3.0 drives the 3D turntable. Declared as not required so the device can install and
+         fall back to the static 2D deck rather than being filtered out of the store. -->
+    <uses-feature
+        android:glEsVersion="0x00030000"
+        android:required="false" />
+
+    <application
+        android:name=".VynylApplication"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Vynyl.Starting"
+        android:enableOnBackInvokedCallback="true"
+        tools:targetApi="34">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Vynyl.Starting">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Opening a .vynyl bundle from a file manager imports it locally. The importer does not
+                 trust the archive: see core/storage/VynylBundle.kt. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/vnd.vynyl.record" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.vynyl.record" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          WorkManager's foreground service carries the render notification. Declaring the service type
+          here is what Android 14 checks against the permission above; without it the notification would
+          be refused and a long press could be killed mid-render.
+        -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false"
+            tools:node="merge" />
+
+        <!--
+          Sharing an exported file. The provider is not exported and only grants read access to the
+          specific URI handed to the Sharesheet, which is why no storage permission is needed.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

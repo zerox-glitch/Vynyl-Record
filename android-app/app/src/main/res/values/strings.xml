@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Vynyl Record</string>
+    <string name="app_subtitle">Digital Wax Preserver</string>
+
+    <!-- Navigation -->
+    <string name="tab_studio">Studio</string>
+    <string name="tab_sound_lab">Sound Lab</string>
+    <string name="tab_vault">Master Vault</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_1_title">A voice they can return to.</string>
+    <string name="onboarding_1_body">Record a few seconds of the people you love. It is pressed into wax on this phone, and it stays on this phone.</string>
+    <string name="onboarding_2_title">Pressed locally.</string>
+    <string name="onboarding_2_body">The recording, the warmth, the crackle and the mastering all happen on the device. No account, no upload, no waiting for a server.</string>
+    <string name="onboarding_3_title">Yours to keep.</string>
+    <string name="onboarding_3_body">Export a record as audio, artwork or a portable Vynyl bundle, and back up the whole shelf whenever you like. Uninstalling without a backup removes records that were never exported.</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_finish">Create first record</string>
+
+    <!-- Studio -->
+    <string name="studio_title">Studio</string>
+    <string name="studio_step_capture">Capture</string>
+    <string name="studio_step_dedication">Dedication</string>
+    <string name="studio_step_recipe">Sound recipe</string>
+    <string name="studio_step_appearance">Vinyl appearance</string>
+    <string name="studio_step_render">Render</string>
+    <string name="studio_record_start">Start recording</string>
+    <string name="studio_record_pause">Pause recording</string>
+    <string name="studio_record_resume">Resume recording</string>
+    <string name="studio_record_stop">Stop recording</string>
+    <string name="studio_record_cancel">Discard recording</string>
+    <string name="studio_import">Import local audio</string>
+    <string name="studio_mic_rationale">Vynyl Record needs the microphone to record your voice. You can also import a recording you already have.</string>
+    <string name="studio_max_length_reached">Side limit reached — that is a long side.</string>
+    <string name="studio_render_action">Press the record</string>
+    <string name="studio_render_running">Pressing your record</string>
+
+    <!-- Library -->
+    <string name="vault_title">Master Vault</string>
+    <string name="vault_empty_title">Your shelf is waiting for its first voice.</string>
+    <string name="vault_empty_body">Press a recording in the Studio and it will appear here, on this device, with nothing to sign in to.</string>
+
+    <!-- Settings -->
+    <string name="settings_privacy_line">Your recordings stay on this device unless you choose to export or share them.</string>
+    <string name="settings_uninstall_warning">Uninstalling the app removes records that were never exported or backed up.</string>
+
+    <!-- Render notification -->
+    <string name="render_channel_name">Pressing records</string>
+    <string name="render_channel_description">Progress for a record being pressed in the Studio.</string>
+    <string name="render_notification_title">Pressing your record</string>
+    <string name="render_notification_cancel">Cancel</string>
+    <string name="render_notification_open">Open</string>
+    <string name="render_notification_ready">Your record is ready</string>
+    <string name="render_notification_failed">The press failed</string>
+    <string name="render_notification_percent">%1$d%%</string>
+
+    <!-- Content descriptions used by TalkBack. Every icon-only control carries one. -->
+    <string name="cd_favourite">Favourite</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_privacy_title">Privacy</string>
+    <string name="settings_audio_title">Audio</string>
+    <string name="settings_graphics_title">Graphics</string>
+    <string name="settings_storage_title">Storage</string>
+    <string name="settings_about_title">About</string>
+
+    <!-- The Vault -->
+    <string name="vault_subtitle">Every record you have pressed, kept on this phone.</string>
+    <string name="vault_search_hint">Search titles, names, dedications</string>
+    <string name="vault_filter_any">Any</string>
+    <string name="vault_action_play">Play on the turntable</string>
+    <string name="vault_action_edit">Edit the details</string>
+    <string name="vault_action_render">Press it again</string>
+    <string name="vault_action_duplicate">Duplicate</string>
+    <string name="vault_action_export">Export audio</string>
+    <string name="vault_action_share">Share</string>
+    <string name="vault_action_delete">Delete</string>
+    <string name="vault_delete_title">Delete this record?</string>
+    <string name="vault_delete_body">The recording, the pressed record and the artwork are removed. You can undo this straight afterwards.</string>
+    <string name="vault_undo">Undo</string>
+    <string name="vault_import_title">Import a record</string>
+
+    <!-- The player -->
+    <string name="player_needle_note">The record starts when the needle lands.</string>
+    <string name="player_camera_next">Next view</string>
+    <string name="player_camera_reset">Reset the camera</string>
+    <string name="player_export">Export</string>
+
+    <!-- The Sound Lab -->
+    <string name="sound_lab_add">Add your own audio</string>
+    <string name="sound_lab_bundled">In the app</string>
+    <string name="sound_lab_yours">Yours</string>
+    <string name="sound_lab_trim">Trim and level</string>
+    <string name="sound_lab_bundled_note">This came with the app. Switch it off instead of deleting it.</string>
+
+    <!-- Export -->
+    <string name="export_title">Export</string>
+    <string name="export_m4a">M4A audio</string>
+    <string name="export_m4a_detail">Smaller file, plays anywhere</string>
+    <string name="export_wav">WAV master</string>
+    <string name="export_wav_detail">The exact pressed audio, lossless</string>
+    <string name="export_artwork">Sleeve artwork</string>
+    <string name="export_artwork_detail">A square PNG of the cover</string>
+    <string name="export_bundle">Vynyl bundle</string>
+    <string name="export_bundle_detail">The record, its source and its recipe in one file</string>
+    <string name="export_share">Share it</string>
+
+    <!-- Backup -->
+    <string name="backup_write">Back up to a file</string>
+    <string name="backup_restore">Restore from a file</string>
+    <string name="backup_restore_title">Restore this backup?</string>
+    <string name="backup_restore_body">Records already in the Vault are kept as they are; anything new in the backup is added.</string>
+</resources>

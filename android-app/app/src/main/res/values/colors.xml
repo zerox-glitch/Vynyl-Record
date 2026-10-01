@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Android framework's palette (window background, status bar, splash) has to match the Compose
+  theme in core/design/VynylColors.kt. These are the same values, kept here so the window is the right
+  colour before the first Compose frame is drawn.
+-->
+<resources>
+    <color name="vynyl_obsidian">#FF0C0A09</color>
+    <color name="vynyl_deep_stone">#FF1C1917</color>
+    <color name="vynyl_panel">#FF211E1A</color>
+    <color name="vynyl_amber">#FFD97706</color>
+    <color name="vynyl_amber_bright">#FFF59E0B</color>
+    <color name="vynyl_brass">#FFB45309</color>
+    <color name="vynyl_cream">#FFFEF3C7</color>
+    <color name="vynyl_warm_paper">#FFFFF7E6</color>
+    <color name="vynyl_ruby">#FF991B1B</color>
+    <color name="vynyl_muted">#FFA8A29E</color>
+
+    <!-- The two status colours from the Compose palette, used by the render notification. -->
+    <color name="vynyl_error">#FFF87171</color>
+    <color name="vynyl_success">#FF34D399</color>
+
+    <!-- Launcher icon backgrounds. -->
+    <color name="ic_launcher_background">#FF0C0A09</color>
+</resources>

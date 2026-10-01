@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Vynyl</string>
+
+    <!-- The app shell -->
+    <string name="tab_studio">Studio</string>
+    <string name="tab_deck">3D Deck</string>
+    <string name="tab_lab">Sound Lab</string>
+    <string name="tab_vault">Vault</string>
+    <string name="tab_settings">Settings</string>
+    <string name="cd_bottom_bar">Main sections</string>
+
+    <!-- Capture -->
+    <string name="cd_start_recording">Record a voice into the wax</string>
+    <string name="cd_stop_recording">Stop recording</string>
+    <string name="cd_import_audio">Import a voice recording from this device</string>
+    <string name="cd_waveform">Waveform of the recording being pressed</string>
+    <string name="cd_press_progress">Pressing progress</string>
+    <string name="permission_microphone_rationale">Recording needs the microphone. You can still import a recording you already have.</string>
+
+    <!-- Demo screen -->
+    <string name="demo_default_title">Side A · Voice Note</string>
+    <string name="demo_default_recipient">For Someone Special</string>
+    <string name="demo_default_sender">From Vynyl Record</string>
+
+    <!-- Playback controls -->
+    <string name="cd_play">Play record</string>
+    <string name="cd_pause">Pause record</string>
+    <string name="cd_skip_back">Skip backward ten seconds</string>
+    <string name="cd_skip_forward">Skip forward ten seconds</string>
+    <string name="cd_seek">Playback position</string>
+    <string name="cd_reset_camera">Reset camera</string>
+    <string name="cd_style_selector">Vinyl style</string>
+    <string name="cd_camera_selector">Camera view</string>
+    <string name="cd_quality_selector">Renderer quality</string>
+    <string name="cd_fullscreen">Enter full-screen turntable</string>
+    <string name="cd_exit_fullscreen">Exit full-screen turntable</string>
+    <string name="cd_turntable_surface">Three-dimensional turntable. Use one finger to orbit, pinch to zoom, and double tap to reset the view.</string>
+    <string name="cd_fps_overlay">Renderer performance overlay</string>
+
+    <!-- Announcements -->
+    <string name="announce_playing">Playing</string>
+    <string name="announce_paused">Paused</string>
+    <string name="announce_completed">Record finished</string>
+    <string name="announce_error">Playback error</string>
+    <string name="announce_style_changed">Vinyl style changed to %1$s</string>
+    <string name="announce_camera_reset">Camera reset</string>
+
+    <!-- Labels -->
+    <string name="label_style">Vinyl style</string>
+    <string name="label_camera">Camera</string>
+    <string name="label_quality">Quality</string>
+    <string name="label_fullscreen">Full screen</string>
+    <string name="label_position">Position</string>
+
+    <!-- Fallback -->
+    <string name="fallback_title">OpenGL ES 3.0 unavailable</string>
+    <string name="fallback_body">This device or emulator cannot run the procedural 3D turntable. Playback controls remain fully functional.</string>
+    <string name="fallback_style">Vinyl style: %1$s</string>
+
+    <!-- Debug overlay -->
+    <string name="debug_overlay_fmt">%1$.1f FPS · %2$d×%3$d · %4$s · %5$d draws</string>
+</resources>
