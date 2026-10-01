@@ -185,9 +185,12 @@ support through standard focusable components.
   builders, the camera clamps and the deck's animation.
 * `app/src/androidTest` (device): Room's real behaviour, the repository's file-and-row ordering and its
   startup sweep, a full press through the pipeline including MediaCodec, a bundle round trip into a second
-  library, the shader/uniform contract, the manifest's permission set, and the onboarding flow.
-* `tools/kotlincheck.py` and `tools/check_meshes.py` are the static checks that run in an environment without
-  an SDK. See the README for exactly what they prove and what they do not.
+  library, the shader/uniform contract, the manifest's permission set, export through the real FileProvider,
+  backup and restore, the asset catalogue, the preferences store, the navigation shell, and the onboarding
+  flow.
+* `tools/kotlincheck.py`, `tools/importprojectcheck.py`, `tools/check_meshes.py` and `tools/check_strings.py`
+  are the static checks that run in an environment without an SDK. See the README for exactly what they
+  prove and what they do not.
 
 ## Build configuration
 

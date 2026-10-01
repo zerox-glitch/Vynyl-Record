@@ -68,7 +68,7 @@ Static verification, re-run after every change (`tools/`, Python 3, no Android S
 | Every member call on a project type names a member that type declares | same | 0 unknown members |
 | A symbol used from another package always has its import | `python3 tools/importprojectcheck.py` | 0 missing, 255 top-level names |
 | Every mesh builder produces outward-facing, in-range geometry | `python3 tools/check_meshes.py` | 10/10 builders |
-| Every string resource is used | `tools/` scan of `R.string.` / `@string/` | 0 unused of 88 |
+| Every string is declared once, used, and resolvable | `python3 tools/check_strings.py` | 88 declared, 88 referenced, 0 unused |
 
 The import checker exists because of the environment: with no compiler, a forgotten import is invisible to
 every other scan here, and two real ones were found and fixed this way — a `preferencesDataStore` delegate
