@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      The Compose theme draws everything, but the Activity still needs a window background that matches
+      it: without this, the first frame of a cold start flashes the platform default white and the
+      careful dark palette looks like a bug.
+    -->
+    <style name="Theme.Vynyl" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/vynyl_obsidian</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
+    </style>
+
+    <!--
+      The Android 12+ splash screen. Nothing here is fetched: the mark is a vector drawable that ships
+      in the APK, which is why it can be shown before any code runs.
+    -->
+    <style name="Theme.Vynyl.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/vynyl_obsidian</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_mark</item>
+        <item name="windowSplashScreenAnimationDuration">240</item>
+        <item name="postSplashScreenTheme">@style/Theme.Vynyl</item>
+    </style>
+</resources>

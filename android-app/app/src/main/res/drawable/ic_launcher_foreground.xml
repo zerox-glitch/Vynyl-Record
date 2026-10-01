@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher mark: a vinyl disc with a brass tonearm, drawn as vectors so the icon costs a few
+  hundred bytes and never needs a raster asset at any density.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Disc -->
+    <path
+        android:fillColor="#1C1917"
+        android:pathData="M54,26 a28,28 0 1,1 0,56 a28,28 0 1,1 0,-56z" />
+    <path
+        android:strokeColor="#B45309"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:pathData="M54,26 a28,28 0 1,1 0,56 a28,28 0 1,1 0,-56z" />
+    <path
+        android:strokeColor="#3F3A34"
+        android:strokeWidth="0.9"
+        android:fillColor="#00000000"
+        android:pathData="M54,31 a23,23 0 1,1 0,46 a23,23 0 1,1 0,-46z" />
+    <path
+        android:strokeColor="#3F3A34"
+        android:strokeWidth="0.9"
+        android:fillColor="#00000000"
+        android:pathData="M54,36.5 a17.5,17.5 0 1,1 0,35 a17.5,17.5 0 1,1 0,-35z" />
+
+    <!-- Label -->
+    <path
+        android:fillColor="#991B1B"
+        android:pathData="M54,42 a12,12 0 1,1 0,24 a12,12 0 1,1 0,-24z" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M54,52.6 a1.4,1.4 0 1,1 0,2.8 a1.4,1.4 0 1,1 0,-2.8z" />
+
+    <!-- Tonearm -->
+    <path
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M78,30 L63,49" />
+    <path
+        android:fillColor="#FEF3C7"
+        android:pathData="M78,26.4 a4.2,4.2 0 1,1 0,8.4 a4.2,4.2 0 1,1 0,-8.4z" />
+    <path
+        android:fillColor="#FEF3C7"
+        android:pathData="M61.4,47.2 a3.2,3.2 0 1,1 0,6.4 a3.2,3.2 0 1,1 0,-6.4z" />
+</vector>
