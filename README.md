@@ -23,3 +23,14 @@ FFmpeg is supplied by the project dependencies. The production build generates a
 The public navigation does not expose the administration area. Configure `ADMIN_PASSWORD` and, preferably, a separate `ADMIN_SESSION_SECRET` using `.env.example`, then visit `/admin/login` directly. Admin pages and all management API mutations require the signed, HTTP-only administrator session cookie.
 
 Migration `00004` adds the profile membership fields, recording metadata, and corrected plan-to-audio permissions required by the current administration and studio interfaces.
+
+## Native Android app
+
+`android-app/` is a self-contained, fully offline Android application that records a voice, presses it into
+vinyl on the device, stores it in a local Master Vault, plays it on a 3D turntable and exports it as audio,
+artwork or a portable `.vynyl` bundle. It has no server, no account and no `INTERNET` permission, and none of
+the integrations above are used by it — it does not read `.env.local` and needs no keys of any kind.
+
+Start at [`android-app/README.md`](android-app/README.md); the audio engine, the 3D renderer, the architecture
+and the privacy statement each have their own document in that folder. The Next.js application described
+above is unchanged and remains deployable on its own.
